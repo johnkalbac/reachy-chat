@@ -6,6 +6,7 @@ colorTo: indigo
 sdk: docker
 pinned: false
 tags:
+  - reachy_mini
   - reachy_mini_python_app
 ---
 
