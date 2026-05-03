@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 REALTIME_MODEL = "gpt-realtime"
 REALTIME_RATE = 24_000  # OpenAI Realtime default: PCM16 mono @ 24 kHz, both directions.
-REALTIME_VOICE = "alloy"
+REALTIME_VOICE = "coral"
 MAX_TURN_S = 30.0  # hard cap; an unresponsive session shouldn't pin the device.
 SDK_INPUT_RATE = 16_000  # matches main.SDK_SAMPLE_RATE; mic is 16 kHz.
 
