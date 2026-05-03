@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reachy-chat"
+version = "0.1.0"
+description = "AI-enabled chat assistant for the Reachy Mini Wireless."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "John Kalbac" }]
+dependencies = [
+    "reachy-mini",
+    "numpy",
+    "scipy",
+    "pvporcupine>=3.0",
+]
+
+[project.entry-points."reachy_mini_apps"]
+reachy_chat = "reachy_chat.main:ReachyChatApp"
+
+[tool.setuptools.packages.find]
+include = ["reachy_chat*"]

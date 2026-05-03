@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# reachy-chat: never commit Picovoice wake-word files or session-local agent context
+*.ppn
+agents.local.md
+
