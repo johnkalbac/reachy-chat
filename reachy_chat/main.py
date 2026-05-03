@@ -36,7 +36,8 @@ class ReachyChatApp(ReachyMiniApp):
     custom_app_url: str | None = None
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
-        model = WakeWordModel(wakeword_models=[WAKE_WORD])
+        # Force ONNX backend; tflite-runtime has no wheel for Python 3.12 aarch64.
+        model = WakeWordModel(wakeword_models=[WAKE_WORD], inference_framework="onnx")
 
         logger.info("=" * 50)
         logger.info("REACHY CHAT STARTING")

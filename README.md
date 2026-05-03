@@ -62,8 +62,13 @@ sudo apt update && sudo apt install -y espeak-ng
 
 ### 3. Clone this repo and install in editable mode
 ```bash
-cd ~ && git clone https://github.com/<your-user>/reachy-chat.git
+cd ~ && git clone git@github.com:<your-user>/reachy-chat.git
 cd reachy-chat
+
+# openWakeWord pins tflite-runtime, which has no wheel for Python 3.12 on
+# aarch64 (the daemon's apps venv). Install it without deps and provide
+# what it actually needs at runtime; we use the ONNX backend.
+/venvs/apps_venv/bin/pip install --no-deps openwakeword
 /venvs/apps_venv/bin/pip install -e .
 ```
 
