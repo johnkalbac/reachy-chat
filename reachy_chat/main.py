@@ -1,8 +1,12 @@
-"""Reachy Chat: wake word -> reply 'hello'. First milestone, no cloud yet.
+"""Reachy Chat: wake word -> OpenAI Realtime API conversation turn.
 
 openWakeWord ships pre-trained models for `alexa`, `hey_jarvis`, `hey_mycroft`,
 `hey_rhasspy`, `weather`, `timer`. None of them are "Reachy", so we use
 `hey_jarvis` as a stand-in until we train a custom model.
+
+After the wake word fires, control hands off to `realtime_turn()` which
+opens a WebSocket session against `gpt-realtime`, streams the user's
+request up, and plays the assistant's audio reply back through the speaker.
 """
 
 from __future__ import annotations
@@ -21,6 +25,8 @@ from openwakeword.model import Model as WakeWordModel
 from scipy.signal import resample_poly
 
 from reachy_mini import ReachyMini, ReachyMiniApp
+
+from reachy_chat.realtime import realtime_turn
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +80,10 @@ class ReachyChat(ReachyMiniApp):
                     score = scores.get(WAKE_WORD, 0.0)
                     if score >= WAKE_WORD_THRESHOLD:
                         logger.info(
-                            "wake word %r detected (score=%.3f); speaking %r",
-                            WAKE_WORD, score, GREETING,
+                            "wake word %r detected (score=%.3f); opening realtime turn",
+                            WAKE_WORD, score,
                         )
-                        _speak(reachy_mini, GREETING, output_rate)
+                        realtime_turn(reachy_mini, stop_event, output_rate)
                         # The model keeps a rolling ~1.5s feature buffer; without
                         # flushing it past the wake-word audio, the next predict()
                         # retriggers on the same features. model.reset() only
@@ -87,7 +93,8 @@ class ReachyChat(ReachyMiniApp):
                         for _ in range(25):  # 25 * 80 ms = 2.0 s
                             model.predict(silence)
                         buffer = np.empty(0, dtype=np.int16)
-                        # Discard real audio captured during the greeting + flush.
+                        # Discard any mic audio left in the SDK queue between the
+                        # producer thread exiting and us resuming wake-word reads.
                         drain_until = time.time() + 0.3
                         while time.time() < drain_until:
                             reachy_mini.media.get_audio_sample()
@@ -104,7 +111,11 @@ def _to_mono_int16(sample: np.ndarray) -> np.ndarray:
 
 
 def _speak(reachy_mini: ReachyMini, text: str, output_rate: int) -> None:
-    """Render `text` via espeak-ng, resample to `output_rate`, push to speaker."""
+    """Render `text` via espeak-ng, resample to `output_rate`, push to speaker.
+
+    Unused on the happy path now that wake-word hands off to realtime_turn().
+    Kept around for offline diagnostics when OPENAI_API_KEY isn't available.
+    """
     wav_path = Path("/tmp/reachy_chat_tts.wav")
     subprocess.run(
         ["espeak-ng", "-w", str(wav_path), text],

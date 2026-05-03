@@ -6,7 +6,8 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:picovoice.ai)",
       "WebFetch(domain:console.picovoice.ai)",
-      "WebSearch"
+      "WebSearch",
+      "WebFetch(domain:platform.openai.com)"
     ]
   }
 }

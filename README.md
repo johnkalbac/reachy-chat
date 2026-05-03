@@ -12,9 +12,10 @@ tags:
 
 # reachy-chat
 
-An AI-enabled chat assistant for the Reachy Mini Wireless. First milestone
-(this revision): wake on a keyword and reply with a local text-to-speech
-"hello". No cloud calls yet — that comes next.
+An AI-enabled chat assistant for the Reachy Mini Wireless. Wake on a
+keyword, then have a one-shot voice conversation with OpenAI's Realtime
+API: the user's request streams up over WebSocket, the assistant's audio
+reply streams back to the speaker, and we return to wake-word listening.
 
 The wake word right now is **"hey jarvis"**, not "Reachy". Reason:
 [openWakeWord](https://github.com/dscripka/openWakeWord) is fully
@@ -83,6 +84,25 @@ cd reachy-chat
 /venvs/apps_venv/bin/reachy-mini-app-assistant check .
 ```
 
+### 6. Provide the OpenAI API key to the daemon
+
+The app reads `OPENAI_API_KEY` from its process environment. The daemon
+runs under systemd and does not inherit your interactive shell — the key
+has to be set in the unit itself. Use a drop-in:
+
+```bash
+sudo systemctl edit reachy-mini-daemon
+# In the editor that opens, add:
+# [Service]
+# Environment=OPENAI_API_KEY=sk-...
+sudo systemctl restart reachy-mini-daemon
+```
+
+Verify the daemon sees it:
+```bash
+sudo systemctl show reachy-mini-daemon -p Environment | grep OPENAI_API_KEY
+```
+
 ## Running
 
 Pick one:
@@ -126,10 +146,19 @@ clone (`c:\git\github\reachy-chat`) when you want a local mirror.
 
 ## Tuning
 
-Constants at the top of [`reachy_chat/main.py`](reachy_chat/main.py):
+Wake-word constants at the top of [`reachy_chat/main.py`](reachy_chat/main.py):
 
 | Constant | Default | What it controls |
 |---|---|---|
 | `WAKE_WORD` | `"hey_jarvis"` | Which openWakeWord model to listen for. Other built-ins: `alexa`, `hey_mycroft`, `hey_rhasspy`, `weather`, `timer`. |
 | `WAKE_WORD_THRESHOLD` | `0.5` | Detection score cutoff in [0, 1]. Raise if you get false triggers; lower if it misses. |
-| `GREETING` | `"hello"` | What espeak-ng speaks on detection. |
+| `GREETING` | `"hello"` | Fallback espeak-ng phrase. Unused on the happy path; kept for offline diagnostics. |
+
+Realtime constants at the top of [`reachy_chat/realtime.py`](reachy_chat/realtime.py):
+
+| Constant | Default | What it controls |
+|---|---|---|
+| `REALTIME_MODEL` | `"gpt-realtime"` | OpenAI Realtime model name. |
+| `REALTIME_VOICE` | `"alloy"` | Output voice — also `marin`, `cedar`, etc. |
+| `REALTIME_INSTRUCTIONS` | (short prompt) | System prompt sent on session.update. |
+| `MAX_TURN_S` | `30.0` | Hard cap on a single conversational turn. |
