@@ -14,7 +14,8 @@ dependencies = [
     "reachy-mini",
     "numpy",
     "scipy",
-    "pvporcupine>=3.0",
+    "openwakeword>=0.6",
+    "onnxruntime",
 ]
 
 [project.entry-points."reachy_mini_apps"]

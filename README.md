@@ -12,8 +12,14 @@ tags:
 # reachy-chat
 
 An AI-enabled chat assistant for the Reachy Mini Wireless. First milestone
-(this revision): wake on the keyword "Reachy" and reply with a local
-text-to-speech "hello". No cloud calls yet — that comes next.
+(this revision): wake on a keyword and reply with a local text-to-speech
+"hello". No cloud calls yet — that comes next.
+
+The wake word right now is **"hey jarvis"**, not "Reachy". Reason:
+[openWakeWord](https://github.com/dscripka/openWakeWord) is fully
+license-free but only ships a fixed set of pre-trained models. Training a
+custom "Reachy" model takes a Colab notebook from the openWakeWord docs —
+deferred to a follow-up.
 
 ## Resources
 
@@ -22,6 +28,7 @@ text-to-speech "hello". No cloud calls yet — that comes next.
 - [Python SDK Reference](https://huggingface.co/docs/reachy_mini/SDK/python-sdk)
 - [Building & Publishing Apps](https://huggingface.co/docs/reachy_mini/SDK/apps)
 - [Wireless Development Workflow](https://huggingface.co/docs/reachy_mini/platforms/reachy_mini/development_workflow)
+- [openWakeWord](https://github.com/dscripka/openWakeWord)
 - [Examples (upstream)](https://github.com/pollen-robotics/reachy_mini/tree/main/examples)
 
 ## Architecture
@@ -30,13 +37,14 @@ The app is a Reachy Mini Python app — a package with a
 `[project.entry-points."reachy_mini_apps"]` entry in `pyproject.toml`. The
 daemon (`reachy-mini-daemon`, systemd service on the robot, dashboard at
 `http://reachy-mini.local:8000`) discovers it, launches it as a subprocess
-(`python -u -m reachy_chat.main`), hands it a connected `ReachyMini` instance
-and a `stop_event`, and sends `SIGINT` to stop. Only one Reachy Mini app
-runs at a time.
+(`python -u -m reachy_chat.main`), hands it a connected `ReachyMini`
+instance and a `stop_event`, and sends `SIGINT` to stop. Only one Reachy
+Mini app runs at a time.
 
 `reachy_chat.main:ReachyChatApp.run()` opens the SDK audio streams, feeds
-16 kHz mono PCM frames into Porcupine, and on detection renders the reply
-through `espeak-ng` and pushes the resulting samples back to the speaker.
+16 kHz mono int16 PCM frames (80 ms / 1280 samples each) into openWakeWord,
+and on detection renders the reply through `espeak-ng` and pushes the
+resulting samples back to the speaker.
 
 ## Required device-side setup (one-time)
 
@@ -52,37 +60,16 @@ ssh pollen@reachy-mini.local   # password: root
 sudo apt update && sudo apt install -y espeak-ng
 ```
 
-### 3. Get a Picovoice access key and a "Reachy" wake-word file
-1. Sign up (free, personal use): https://console.picovoice.ai/
-2. Copy the **AccessKey** from the console.
-3. In the console, open **Porcupine → Train Wake Word**, type `Reachy`,
-   pick language **English**, pick platform **Raspberry Pi**, and download
-   the resulting `.ppn` file.
-4. Copy it to the robot:
-   ```bash
-   mkdir -p ~/.config/reachy_chat
-   scp ./Reachy_en_raspberry-pi_*.ppn pollen@reachy-mini.local:~/.config/reachy_chat/wake_word.ppn
-   ```
-5. Persist the access key for the daemon to inherit. The daemon runs as a
-   systemd unit, so add it to a drop-in:
-   ```bash
-   sudo systemctl edit reachy-mini-daemon
-   ```
-   Add:
-   ```ini
-   [Service]
-   Environment="PICOVOICE_ACCESS_KEY=YOUR_KEY_HERE"
-   ```
-   Then:
-   ```bash
-   sudo systemctl restart reachy-mini-daemon
-   ```
-
-### 4. Clone this repo and install in editable mode
+### 3. Clone this repo and install in editable mode
 ```bash
 cd ~ && git clone https://github.com/<your-user>/reachy-chat.git
 cd reachy-chat
 /venvs/apps_venv/bin/pip install -e .
+```
+
+### 4. Pre-download the openWakeWord models
+```bash
+/venvs/apps_venv/bin/python -c "import openwakeword.utils; openwakeword.utils.download_models()"
 ```
 
 ### 5. Validate the app metadata
@@ -131,11 +118,12 @@ When metadata changes (entry points, deps in `pyproject.toml`):
 Commit and push from the Remote-SSH terminal as usual. Pull on the Windows
 clone (`c:\git\github\reachy-chat`) when you want a local mirror.
 
-## Configuration
+## Tuning
 
-Read at startup, both via env vars inherited from the daemon:
+Constants at the top of [`reachy_chat/main.py`](reachy_chat/main.py):
 
-| Variable | Default | Notes |
+| Constant | Default | What it controls |
 |---|---|---|
-| `PICOVOICE_ACCESS_KEY` | *(required)* | From the Picovoice console. |
-| `WAKE_WORD_PATH` | `~/.config/reachy_chat/wake_word.ppn` | Custom Porcupine `.ppn`. |
+| `WAKE_WORD` | `"hey_jarvis"` | Which openWakeWord model to listen for. Other built-ins: `alexa`, `hey_mycroft`, `hey_rhasspy`, `weather`, `timer`. |
+| `WAKE_WORD_THRESHOLD` | `0.5` | Detection score cutoff in [0, 1]. Raise if you get false triggers; lower if it misses. |
+| `GREETING` | `"hello"` | What espeak-ng speaks on detection. |

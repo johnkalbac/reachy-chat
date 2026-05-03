@@ -3,7 +3,10 @@
     "allow": [
       "Bash(dir c:\\\\git\\\\github\\\\reachy-chat /b)",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:picovoice.ai)",
+      "WebFetch(domain:console.picovoice.ai)",
+      "WebSearch"
     ]
   }
 }
