@@ -78,9 +78,17 @@ class ReachyChat(ReachyMiniApp):
                             WAKE_WORD, score, GREETING,
                         )
                         _speak(reachy_mini, GREETING, output_rate)
-                        # Drop captured audio to avoid retriggering on the greeting itself.
+                        # The model keeps a rolling ~1.5s feature buffer; without
+                        # flushing it past the wake-word audio, the next predict()
+                        # retriggers on the same features. model.reset() only
+                        # clears the prediction buffer, not the feature buffer —
+                        # so feed silence to roll the window forward.
+                        silence = np.zeros(FRAME_SAMPLES, dtype=np.int16)
+                        for _ in range(25):  # 25 * 80 ms = 2.0 s
+                            model.predict(silence)
                         buffer = np.empty(0, dtype=np.int16)
-                        drain_until = time.time() + 0.5
+                        # Discard real audio captured during the greeting + flush.
+                        drain_until = time.time() + 0.3
                         while time.time() < drain_until:
                             reachy_mini.media.get_audio_sample()
         finally:
