@@ -160,5 +160,20 @@ Realtime constants at the top of [`reachy_chat/realtime.py`](reachy_chat/realtim
 |---|---|---|
 | `REALTIME_MODEL` | `"gpt-realtime"` | OpenAI Realtime model name. |
 | `REALTIME_VOICE` | `"alloy"` | Output voice — also `marin`, `cedar`, etc. |
-| `REALTIME_INSTRUCTIONS` | (short prompt) | System prompt sent on session.update. |
 | `MAX_TURN_S` | `30.0` | Hard cap on a single conversational turn. |
+
+### System prompt
+
+The `instructions` sent on `session.update` are composed from markdown
+files in [`prompts/`](prompts/) at the repo root. Every `*.md` file is
+read in lexicographic order and concatenated with blank lines between
+fragments — so split your prompt into themed pieces (`role.md`,
+`personality.md`, `boundaries.md`, …) or leave it as one file, your call.
+
+- Sort with numeric prefixes (`00-`, `10-`, `20-`) when order matters.
+- Disable a fragment without deleting it by prefixing the filename with
+  `_` (e.g. `_holiday-mode.md`). Hidden dotfiles are also skipped.
+- Files are reloaded on every wake-word, so edit a `.md`, say "hey
+  jarvis" again, and the new prompt is in effect — no app restart.
+- If `prompts/` is missing or empty, a short built-in default kicks in
+  (`_DEFAULT_INSTRUCTIONS` in `realtime.py`).

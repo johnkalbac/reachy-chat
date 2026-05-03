@@ -16,6 +16,7 @@ import logging
 import threading
 import time
 from math import gcd
+from pathlib import Path
 
 import numpy as np
 from openai import OpenAI
@@ -28,18 +29,21 @@ logger = logging.getLogger(__name__)
 REALTIME_MODEL = "gpt-realtime"
 REALTIME_RATE = 24_000  # OpenAI Realtime default: PCM16 mono @ 24 kHz, both directions.
 REALTIME_VOICE = "alloy"
-REALTIME_INSTRUCTIONS = (
+MAX_TURN_S = 30.0  # hard cap; an unresponsive session shouldn't pin the device.
+SDK_INPUT_RATE = 16_000  # matches main.SDK_SAMPLE_RATE; mic is 16 kHz.
+
+PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+_DEFAULT_INSTRUCTIONS = (
     "You are a helpful assistant living inside a small desktop robot named Reachy. "
     "Keep replies short and conversational — usually one or two sentences."
 )
-MAX_TURN_S = 30.0  # hard cap; an unresponsive session shouldn't pin the device.
-SDK_INPUT_RATE = 16_000  # matches main.SDK_SAMPLE_RATE; mic is 16 kHz.
 
 
 def realtime_turn(reachy_mini: ReachyMini, stop_event: threading.Event, output_rate: int) -> None:
     client = OpenAI()
     deadline = time.monotonic() + MAX_TURN_S
     producer_done = threading.Event()
+    instructions = _load_instructions()
 
     try:
         with client.realtime.connect(model=REALTIME_MODEL) as conn:
@@ -52,10 +56,13 @@ def realtime_turn(reachy_mini: ReachyMini, stop_event: threading.Event, output_r
                         "input": {"turn_detection": {"type": "server_vad"}},
                         "output": {"voice": REALTIME_VOICE},
                     },
-                    "instructions": REALTIME_INSTRUCTIONS,
+                    "instructions": instructions,
                 }
             )
-            logger.info("realtime session opened (model=%s, voice=%s)", REALTIME_MODEL, REALTIME_VOICE)
+            logger.info(
+                "realtime session opened (model=%s, voice=%s, instructions=%d chars)",
+                REALTIME_MODEL, REALTIME_VOICE, len(instructions),
+            )
 
             producer = threading.Thread(
                 target=_pump_mic_to_realtime,
@@ -136,6 +143,35 @@ def _push_realtime_audio(reachy_mini: ReachyMini, pcm_bytes: bytes, output_rate:
         floats = resample_poly(floats, up=output_rate // g, down=REALTIME_RATE // g)
         floats = floats.astype(np.float32)
     reachy_mini.media.push_audio_sample(floats.reshape(-1, 1))
+
+
+def _load_instructions() -> str:
+    """Concatenate all `prompts/*.md` (sorted) into the realtime `instructions`.
+
+    Files whose names start with `_` or `.` are skipped — handy for disabling
+    a fragment without deleting it. Loaded fresh each turn so edits take
+    effect on the next wake-word with no restart needed.
+    """
+    if not PROMPTS_DIR.is_dir():
+        logger.warning("prompts dir %s missing; using built-in default", PROMPTS_DIR)
+        return _DEFAULT_INSTRUCTIONS
+
+    fragments: list[str] = []
+    used: list[str] = []
+    for path in sorted(PROMPTS_DIR.glob("*.md")):
+        if path.name.startswith(("_", ".")):
+            continue
+        text = path.read_text(encoding="utf-8").strip()
+        if text:
+            fragments.append(text)
+            used.append(path.name)
+
+    if not fragments:
+        logger.warning("no usable prompts in %s; using built-in default", PROMPTS_DIR)
+        return _DEFAULT_INSTRUCTIONS
+
+    logger.info("loaded prompt fragments: %s", ", ".join(used))
+    return "\n\n".join(fragments)
 
 
 def _to_mono_int16(sample: np.ndarray) -> np.ndarray:

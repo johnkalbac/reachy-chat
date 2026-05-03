@@ -34,6 +34,12 @@ Wake-word tunables (`WAKE_WORD`, `WAKE_WORD_THRESHOLD`, `FRAME_MS`) sit at the t
 
 Server VAD means we never send `input_audio_buffer.commit` or `response.create` ourselves — the server detects the user's turn end and starts the response.
 
+### System prompt composition
+
+`instructions` is loaded from `prompts/*.md` at the repo root (path resolved as `Path(__file__).resolve().parent.parent / "prompts"` from `realtime.py`). All `.md` files are sorted lexicographically and concatenated with `\n\n` separators; files starting with `_` or `.` are skipped so a fragment can be disabled without deletion. Reloaded on every `realtime_turn()` call — edits take effect on the next wake-word. If the dir is missing or empty, falls back to `_DEFAULT_INSTRUCTIONS` in [reachy_chat/realtime.py](reachy_chat/realtime.py).
+
+The path is module-relative (one directory up from `realtime.py`), which assumes the editable install layout (`pip install -e .`). A non-editable wheel install wouldn't bundle the `prompts/` directory and would always fall back to the default.
+
 ## Non-obvious gotchas — do not "clean up" these
 
 - **Post-detection feature-buffer flush** in [reachy_chat/main.py](reachy_chat/main.py): after a wake-word fires (and the realtime turn returns), the code feeds 25 frames of silence into the wake-word model and drains ~0.3 s of mic audio. openWakeWord keeps a rolling ~1.5 s feature buffer; `model.reset()` only clears the prediction buffer, not the feature buffer, so without this flush the next `predict()` retriggers on the same audio. Don't replace it with `model.reset()`. The flush is *also* needed because the wake-word loop is paused for the full duration of the realtime turn — the feature buffer doesn't roll on its own.
