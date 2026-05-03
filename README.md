@@ -89,7 +89,7 @@ Pick one:
   under installed apps, click **Start**.
 - **REST API** —
   ```bash
-  curl -X POST http://reachy-mini.local:8000/api/apps/start-app/reachy_chat
+  curl -X POST http://reachy-mini.local:8000/api/apps/start-app/reachy-chat
   curl -X POST http://reachy-mini.local:8000/api/apps/stop-current-app
   ```
 - **Direct Python** (fast iteration; bypasses the daemon's app manager but

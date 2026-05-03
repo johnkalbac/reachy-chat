@@ -32,7 +32,7 @@ FRAME_SAMPLES = SDK_SAMPLE_RATE * FRAME_MS // 1000  # 1280
 GREETING = "hello"
 
 
-class ReachyChatApp(ReachyMiniApp):
+class ReachyChat(ReachyMiniApp):
     custom_app_url: str | None = None
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
@@ -130,7 +130,7 @@ def _speak(reachy_mini: ReachyMini, text: str, output_rate: int) -> None:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    app = ReachyChatApp()
+    app = ReachyChat()
     try:
         app.wrapped_run()
     except KeyboardInterrupt:

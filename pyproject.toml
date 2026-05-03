@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.entry-points."reachy_mini_apps"]
-reachy_chat = "reachy_chat.main:ReachyChatApp"
+reachy-chat = "reachy_chat.main:ReachyChat"
 
 [tool.setuptools.packages.find]
 include = ["reachy_chat*"]
