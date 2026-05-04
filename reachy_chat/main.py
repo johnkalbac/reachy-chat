@@ -27,7 +27,7 @@ from scipy.signal import resample_poly
 from reachy_mini import ReachyMini, ReachyMiniApp
 from reachy_mini.utils import create_head_pose
 
-from reachy_chat.realtime import realtime_turn
+from reachy_chat.realtime import realtime_turn, warm_emotions
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,10 @@ class ReachyChat(ReachyMiniApp):
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
         # Force ONNX backend; tflite-runtime has no wheel for Python 3.12 aarch64.
         model = WakeWordModel(wakeword_models=[WAKE_WORD], inference_framework="onnx")
+
+        # Warm the emotions library in the background so the first wake-word
+        # doesn't pay the (one-time) HuggingFace download.
+        threading.Thread(target=warm_emotions, name="warm-emotions", daemon=True).start()
 
         logger.info("=" * 50)
         logger.info("REACHY CHAT STARTING")

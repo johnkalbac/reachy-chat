@@ -26,5 +26,8 @@ dependencies = [
 [project.entry-points."reachy_mini_apps"]
 reachy-chat = "reachy_chat.main:ReachyChat"
 
+[project.scripts]
+reachy-chat-prefetch = "reachy_chat.prefetch:main"
+
 [tool.setuptools.packages.find]
 include = ["reachy_chat*"]

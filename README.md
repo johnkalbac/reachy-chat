@@ -79,6 +79,18 @@ cd reachy-chat
 /venvs/apps_venv/bin/python -c "import openwakeword.utils; openwakeword.utils.download_models()"
 ```
 
+### 4b. Pre-fetch the emotions library
+
+The realtime model can call `play_emotion(...)` to trigger one of ~80 short
+animation clips from
+[`pollen-robotics/reachy-mini-emotions-library`](https://huggingface.co/datasets/pollen-robotics/reachy-mini-emotions-library).
+The dataset is downloaded on first use; pre-fetching avoids a multi-second
+delay on the first wake-word.
+
+```bash
+/venvs/apps_venv/bin/reachy-chat-prefetch
+```
+
 ### 5. Validate the app metadata
 ```bash
 /venvs/apps_venv/bin/reachy-mini-app-assistant check .
@@ -161,6 +173,22 @@ Realtime constants at the top of [`reachy_chat/realtime.py`](reachy_chat/realtim
 | `REALTIME_MODEL` | `"gpt-realtime"` | OpenAI Realtime model name. |
 | `REALTIME_VOICE` | `"alloy"` | Output voice — also `marin`, `cedar`, etc. |
 | `MAX_TURN_S` | `30.0` | Hard cap on a single conversational turn. |
+| `WAVE_AMPLITUDE_DEG` | `15.0` | Antenna sweep amplitude during the assistant's reply. |
+| `WAVE_FREQ_HZ` | `0.8` | Antenna sweep frequency. |
+| `EMOTION_GOTO_DURATION_S` | `0.5` | Smoothing into an emotion clip's first pose. |
+
+### Emotions
+
+The realtime model is given a `play_emotion(name)` function tool whose
+`name` enum is populated from the emotions library at session start. It
+can call this mid-response to trigger an animation; the clip plays in a
+background thread so the model can keep speaking, and the per-tick
+antenna wave pauses for the duration so motion targets don't fight.
+
+If the library can't load (no network on first install, etc.), the tool
+is simply omitted from the session — the rest of the conversation still
+works. Run [`reachy-chat-prefetch`](#4b-pre-fetch-the-emotions-library)
+to pre-cache it.
 
 ### System prompt
 

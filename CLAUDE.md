@@ -32,7 +32,17 @@ Wake-word tunables (`WAKE_WORD`, `WAKE_WORD_THRESHOLD`, `FRAME_MS`) sit at the t
 - **Producer** (`_pump_mic_to_realtime`): reads `get_audio_sample()`, converts to int16 mono, resamples 16 kHz → 24 kHz with `resample_poly(up=3, down=2)`, base64-encodes, sends as `input_audio_buffer.append`.
 - **Main**: iterates `for event in conn:`. On `response.output_audio.delta` it base64-decodes, resamples 24 kHz → SDK output rate, pushes to speaker. On `response.done` (or `error`, or `MAX_TURN_S` cap, or `stop_event`) it sets a done flag, joins the producer, and lets the context manager close the WebSocket.
 
-Server VAD means we never send `input_audio_buffer.commit` or `response.create` ourselves — the server detects the user's turn end and starts the response.
+Server VAD means we never send `input_audio_buffer.commit` or `response.create` ourselves — the server detects the user's turn end and starts the response, *except* after a tool call: when `response.function_call_arguments.done` arrives we send the function output back via `conversation.item.create`, mark `need_continuation=True`, and on the next `response.done` we explicitly call `conn.response.create()` to let the model continue. Without this, the assistant's audio reply gets truncated whenever it calls a tool.
+
+### Emotion tool calls
+
+`_build_tools()` registers a single `play_emotion(name)` function with the realtime session. The `name` enum is populated from `RecordedMoves("pollen-robotics/reachy-mini-emotions-library").list_moves()` (~80 clips). The library is loaded once per process via `_get_emotions()` (lazy, cached) and warmed in a background thread from `ReachyChat.run()` so the first wake-word doesn't wait for HuggingFace.
+
+When the model calls the tool, `_handle_function_call` parses the args, kicks off `_execute_emotion` in a daemon thread (so the model can keep speaking while the clip plays), and immediately replies with `{"status": "started"}` so the model isn't blocked.
+
+`_execute_emotion` and the antenna-wave thread share a `motion_lock` — wave acquires it for each `set_target` (microseconds), the emotion holds it for the entire `play_move` (seconds). This keeps the wave from clobbering the emotion's motion targets.
+
+If the library fails to load (no network on first install), `_build_tools()` returns `[]`, the tool is simply not registered, and the session works without function calling. Run `reachy-chat-prefetch` to pre-cache the dataset.
 
 ### System prompt composition
 
@@ -60,6 +70,9 @@ The path is module-relative (one directory up from `realtime.py`), which assumes
 
 # Pre-download the wake-word ONNX models
 /venvs/apps_venv/bin/python -c "import openwakeword.utils; openwakeword.utils.download_models()"
+
+# Pre-fetch the emotions library (HuggingFace dataset; cached after first call)
+/venvs/apps_venv/bin/reachy-chat-prefetch
 
 # Validate the app metadata so the daemon can discover it
 /venvs/apps_venv/bin/reachy-mini-app-assistant check .
