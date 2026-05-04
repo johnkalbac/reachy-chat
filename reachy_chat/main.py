@@ -25,6 +25,7 @@ from openwakeword.model import Model as WakeWordModel
 from scipy.signal import resample_poly
 
 from reachy_mini import ReachyMini, ReachyMiniApp
+from reachy_mini.utils import create_head_pose
 
 from reachy_chat.realtime import realtime_turn
 
@@ -63,6 +64,8 @@ class ReachyChat(ReachyMiniApp):
                     f"SDK input rate {input_rate} != 16 kHz; resampling not implemented"
                 )
 
+            _play_ready_chime(reachy_mini, output_rate)
+
             buffer = np.empty(0, dtype=np.int16)
 
             while not stop_event.is_set():
@@ -83,6 +86,10 @@ class ReachyChat(ReachyMiniApp):
                             "wake word %r detected (score=%.3f); opening realtime turn",
                             WAKE_WORD, score,
                         )
+                        threading.Thread(
+                            target=_do_nod, args=(reachy_mini,),
+                            name="wake-word-nod", daemon=True,
+                        ).start()
                         realtime_turn(reachy_mini, stop_event, output_rate)
                         # The model keeps a rolling ~1.5s feature buffer; without
                         # flushing it past the wake-word audio, the next predict()
@@ -108,6 +115,33 @@ def _to_mono_int16(sample: np.ndarray) -> np.ndarray:
     if sample.ndim == 2:
         sample = sample.mean(axis=1)
     return (np.clip(sample, -1.0, 1.0) * 32767.0).astype(np.int16)
+
+
+def _do_nod(reachy_mini: ReachyMini) -> None:
+    """A gentle 'I heard you' nod: pitch down ~12 deg, then back up."""
+    try:
+        down = create_head_pose(pitch=np.deg2rad(12.0))
+        neutral = create_head_pose()
+        reachy_mini.goto_target(down, antennas=[0.0, 0.0], duration=0.2)
+        reachy_mini.goto_target(neutral, antennas=[0.0, 0.0], duration=0.25)
+    except Exception:
+        logger.exception("nod failed")
+
+
+def _play_ready_chime(reachy_mini: ReachyMini, output_rate: int) -> None:
+    """Two-note ascending chime (A5 -> E6) signalling 'listening for wake word'."""
+    note_s = 0.12
+    gap_s = 0.03
+    n = int(output_rate * note_s)
+    t = np.arange(n, dtype=np.float32) / output_rate
+    # Quick attack, longer decay so the notes don't click.
+    envelope = np.minimum(t / 0.01, np.exp(-(t - 0.01) / 0.05)).astype(np.float32)
+    tone1 = (np.sin(2 * np.pi * 880.0 * t) * envelope * 0.3).astype(np.float32)
+    tone2 = (np.sin(2 * np.pi * 1318.5 * t) * envelope * 0.3).astype(np.float32)
+    gap = np.zeros(int(output_rate * gap_s), dtype=np.float32)
+    chime = np.concatenate([tone1, gap, tone2])
+    reachy_mini.media.push_audio_sample(chime.reshape(-1, 1))
+    time.sleep(len(chime) / output_rate + 0.05)
 
 
 def _speak(reachy_mini: ReachyMini, text: str, output_rate: int) -> None:

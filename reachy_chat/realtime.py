@@ -23,6 +23,7 @@ from openai import OpenAI
 from scipy.signal import resample_poly
 
 from reachy_mini import ReachyMini
+from reachy_mini.utils import create_head_pose
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,10 @@ REALTIME_RATE = 24_000  # OpenAI Realtime default: PCM16 mono @ 24 kHz, both dir
 REALTIME_VOICE = "coral"
 MAX_TURN_S = 30.0  # hard cap; an unresponsive session shouldn't pin the device.
 SDK_INPUT_RATE = 16_000  # matches main.SDK_SAMPLE_RATE; mic is 16 kHz.
+
+WAVE_AMPLITUDE_DEG = 15.0  # peak antenna deflection while assistant is speaking.
+WAVE_FREQ_HZ = 0.8         # full cycles per second.
+WAVE_TICK_S = 0.02         # ~50 Hz update rate for set_target.
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 _DEFAULT_INSTRUCTIONS = (
@@ -43,6 +48,8 @@ def realtime_turn(reachy_mini: ReachyMini, stop_event: threading.Event, output_r
     client = OpenAI()
     deadline = time.monotonic() + MAX_TURN_S
     producer_done = threading.Event()
+    wave_stop = threading.Event()
+    wave_thread: threading.Thread | None = None
     instructions = _load_instructions()
 
     try:
@@ -82,6 +89,14 @@ def realtime_turn(reachy_mini: ReachyMini, stop_event: threading.Event, output_r
                     break
 
                 if event.type == "response.output_audio.delta":
+                    if wave_thread is None:
+                        wave_thread = threading.Thread(
+                            target=_wave_antennas,
+                            args=(reachy_mini, wave_stop),
+                            name="realtime-antenna-wave",
+                            daemon=True,
+                        )
+                        wave_thread.start()
                     pcm_bytes = base64.b64decode(event.delta)
                     _push_realtime_audio(reachy_mini, pcm_bytes, output_rate)
                     last_audio_at = time.monotonic()
@@ -109,6 +124,13 @@ def realtime_turn(reachy_mini: ReachyMini, stop_event: threading.Event, output_r
         logger.exception("realtime turn failed")
     finally:
         producer_done.set()
+        wave_stop.set()
+        if wave_thread is not None:
+            wave_thread.join(timeout=0.5)
+            try:
+                reachy_mini.goto_target(create_head_pose(), antennas=[0.0, 0.0], duration=0.2)
+            except Exception:
+                logger.exception("returning antennas to neutral failed")
 
 
 def _pump_mic_to_realtime(
@@ -132,6 +154,21 @@ def _pump_mic_to_realtime(
     except Exception:
         # The receiver loop will see the connection close or an error event.
         logger.exception("mic producer thread crashed")
+
+
+def _wave_antennas(reachy_mini: ReachyMini, stop_flag: threading.Event) -> None:
+    """Antisymmetric sine wave on the antennas while the assistant is speaking."""
+    neutral = create_head_pose()
+    amplitude = np.deg2rad(WAVE_AMPLITUDE_DEG)
+    omega = 2 * np.pi * WAVE_FREQ_HZ
+    t0 = time.monotonic()
+    try:
+        while not stop_flag.is_set():
+            offset = float(amplitude * np.sin(omega * (time.monotonic() - t0)))
+            reachy_mini.set_target(head=neutral, antennas=[offset, -offset])
+            time.sleep(WAVE_TICK_S)
+    except Exception:
+        logger.exception("antenna wave thread crashed")
 
 
 def _push_realtime_audio(reachy_mini: ReachyMini, pcm_bytes: bytes, output_rate: int) -> None:
