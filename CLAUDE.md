@@ -34,15 +34,40 @@ Wake-word tunables (`WAKE_WORD`, `WAKE_WORD_THRESHOLD`, `FRAME_MS`) sit at the t
 
 Server VAD means we never send `input_audio_buffer.commit` or `response.create` ourselves — the server detects the user's turn end and starts the response, *except* after a tool call: when `response.function_call_arguments.done` arrives we send the function output back via `conversation.item.create`, mark `need_continuation=True`, and on the next `response.done` we explicitly call `conn.response.create()` to let the model continue. Without this, the assistant's audio reply gets truncated whenever it calls a tool.
 
-### Emotion tool calls
+### Tool calls
 
-`_build_tools()` registers a single `play_emotion(name)` function with the realtime session. The `name` enum is populated from `RecordedMoves("pollen-robotics/reachy-mini-emotions-library").list_moves()` (~80 clips). The library is loaded once per process via `_get_emotions()` (lazy, cached) and warmed in a background thread from `ReachyChat.run()` so the first wake-word doesn't wait for HuggingFace.
+The realtime model has a fixed set of function tools, dispatched through a registry in [reachy_chat/realtime.py](reachy_chat/realtime.py):
 
-When the model calls the tool, `_handle_function_call` parses the args, kicks off `_execute_emotion` in a daemon thread (so the model can keep speaking while the clip plays), and immediately replies with `{"status": "started"}` so the model isn't blocked.
+```python
+TOOL_HANDLERS: dict[str, Callable[[ReachyMini, dict, dict], dict]] = {
+    "play_emotion":  _tool_play_emotion,
+    "play_dance":    _tool_play_dance,
+    "set_volume":    _tool_set_volume,
+    "mute":          _tool_mute,
+    "unmute":        _tool_unmute,
+    "who_called_me": _tool_who_called_me,
+    "web_search":    _tool_web_search,
+    "set_timer":     _tool_set_timer,
+}
+```
 
-`_execute_emotion` and the antenna-wave thread share a `motion_lock` — wave acquires it for each `set_target` (microseconds), the emotion holds it for the entire `play_move` (seconds). This keeps the wave from clobbering the emotion's motion targets.
+Each tool has a `_<name>_schema()` builder (its JSON-schema definition for `session.update`) and a `_tool_<name>(reachy_mini, args, ctx)` handler. `_build_tools()` calls every builder; builders return `None` to opt out (e.g. emotions library failed to load) — adding or removing a tool is one place.
 
-If the library fails to load (no network on first install), `_build_tools()` returns `[]`, the tool is simply not registered, and the session works without function calling. Run `reachy-chat-prefetch` to pre-cache the dataset.
+**Sync vs async execution.** Most handlers kick off work in a daemon thread and return `{"status": "started", ...}` immediately so the model can keep speaking. The exception is `web_search`, which **synchronously** calls the OpenAI Responses API (with `tools=[{"type": "web_search"}]`, same `OPENAI_API_KEY`) and returns the answer in the function-call output. The realtime event loop blocks for up to `WEB_SEARCH_TIMEOUT_S` (15 s) during the call — that's fine because the model's response is paused waiting for the tool result anyway. The handler tries `web_search` first and falls back to `web_search_preview` on a tool-name mismatch since OpenAI has shipped both.
+
+**Continuation after tool calls.** Server VAD normally means we never send `input_audio_buffer.commit` or `response.create` ourselves — the server detects the user's turn end and starts the response. *Except* after a tool call: when `response.function_call_arguments.done` arrives we send the function output back via `conversation.item.create`, mark `need_continuation=True`, and on the next `response.done` we explicitly call `conn.response.create()` to let the model continue. Without this, the assistant's audio reply gets truncated whenever it calls a tool.
+
+**Recorded-move library cache.** `_get_recorded_moves(library_id)` lazy-loads and caches both the emotions and dances datasets in `_recorded_libraries: dict[str, RecordedMoves]`. `warm_libraries()` (called from a daemon thread at startup) primes both. `_execute_recorded_move(reachy_mini, library_id, name, motion_lock)` is the shared player.
+
+**Motion lock.** The antenna wave + the recorded-move player share `motion_lock`. Wave acquires it for each `set_target` (microseconds); a `play_move` holds it for the duration of the clip. Without this they'd fight over motion targets.
+
+**Volume scaling chokepoint.** `apply_output_volume(samples)` applies `_volume_pct` / `_muted` (state in `realtime.py`, guarded by `_volume_lock`). Every `push_audio_sample` call routes through it: `_push_realtime_audio`, `play_ready_chime`, `_speak`, and the timer announcement. `set_volume` / `mute` / `unmute` tools mutate the state and return the new state to the model.
+
+**Realtime session lock.** A device-wide `_realtime_session_lock` (in `realtime.py`) ensures only one realtime session is active at a time. `realtime_turn` and `announce_via_realtime` both acquire it. A timer firing while a wake-word turn is in flight waits up to 30 s for the lock before announcing — wake-word turns have higher implicit priority.
+
+**Timer service.** [reachy_chat/timers.py](reachy_chat/timers.py) defines `TimerService` (worker thread + `heapq` of `(deadline, id, label)`), instantiated in `ReachyChat.run()` after the audio streams are up, registered as the module singleton via `timers.set_service(...)`, and stopped in the `finally` clause. The `set_timer` tool handler calls `timers.get_service().add_timer(seconds, label)`. When a timer fires, the worker calls `play_ready_chime` then `announce_via_realtime` with the message `f"Timer {label} is done."` — a one-shot realtime session that triggers a response with no mic input via `conn.response.create()`.
+
+**Graceful degradation.** Any builder that returns `None` simply omits its tool from the session (no emotions library → no `play_emotion`; timer service not running → `set_timer` returns an error to the model). The conversation always works with the tools that *are* available.
 
 ### System prompt composition
 

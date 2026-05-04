@@ -79,13 +79,16 @@ cd reachy-chat
 /venvs/apps_venv/bin/python -c "import openwakeword.utils; openwakeword.utils.download_models()"
 ```
 
-### 4b. Pre-fetch the emotions library
+### 4b. Pre-fetch the recorded-move libraries
 
-The realtime model can call `play_emotion(...)` to trigger one of ~80 short
-animation clips from
-[`pollen-robotics/reachy-mini-emotions-library`](https://huggingface.co/datasets/pollen-robotics/reachy-mini-emotions-library).
-The dataset is downloaded on first use; pre-fetching avoids a multi-second
-delay on the first wake-word.
+The realtime model can call `play_emotion(...)` and `play_dance(...)` to
+trigger animation clips from two HuggingFace datasets:
+
+- [`pollen-robotics/reachy-mini-emotions-library`](https://huggingface.co/datasets/pollen-robotics/reachy-mini-emotions-library) — ~80 short emotional reactions.
+- [`pollen-robotics/reachy-mini-dances-library`](https://huggingface.co/datasets/pollen-robotics/reachy-mini-dances-library) — longer choreographed routines.
+
+The datasets are downloaded on first use; pre-fetching avoids a
+multi-second delay on the first wake-word and the first dance.
 
 ```bash
 /venvs/apps_venv/bin/reachy-chat-prefetch
@@ -171,24 +174,44 @@ Realtime constants at the top of [`reachy_chat/realtime.py`](reachy_chat/realtim
 | Constant | Default | What it controls |
 |---|---|---|
 | `REALTIME_MODEL` | `"gpt-realtime"` | OpenAI Realtime model name. |
-| `REALTIME_VOICE` | `"alloy"` | Output voice — also `marin`, `cedar`, etc. |
+| `REALTIME_VOICE` | `"ballad"` | Output voice — also `marin`, `cedar`, etc. |
 | `MAX_TURN_S` | `30.0` | Hard cap on a single conversational turn. |
 | `WAVE_AMPLITUDE_DEG` | `15.0` | Antenna sweep amplitude during the assistant's reply. |
 | `WAVE_FREQ_HZ` | `0.8` | Antenna sweep frequency. |
-| `EMOTION_GOTO_DURATION_S` | `0.5` | Smoothing into an emotion clip's first pose. |
+| `RECORDED_MOVE_GOTO_DURATION_S` | `0.5` | Smoothing into the first pose of an emotion or dance clip. |
+| `WEB_SEARCH_MODEL` | `"gpt-5-mini"` | Model used for the Responses API call backing `web_search`. |
+| `WEB_SEARCH_TIMEOUT_S` | `15.0` | Max time to wait for a search response before erroring back to the model. |
+| `ANNOUNCE_MAX_S` | `15.0` | Cap on the timer-fired announcement realtime session. |
 
-### Emotions
+### Realtime tools
 
-The realtime model is given a `play_emotion(name)` function tool whose
-`name` enum is populated from the emotions library at session start. It
-can call this mid-response to trigger an animation; the clip plays in a
-background thread so the model can keep speaking, and the per-tick
-antenna wave pauses for the duration so motion targets don't fight.
+The realtime model is given a fixed set of function tools at session
+start. Tools whose backing resource is unavailable (no emotions library,
+etc.) are omitted automatically, so a partial environment still works.
 
-If the library can't load (no network on first install, etc.), the tool
-is simply omitted from the session — the rest of the conversation still
-works. Run [`reachy-chat-prefetch`](#4b-pre-fetch-the-emotions-library)
-to pre-cache it.
+| Tool | What it does |
+|---|---|
+| `play_emotion(name)` | Plays one short emotion clip from the emotions library. Async — model keeps speaking. |
+| `play_dance(name)` | Plays one longer dance clip from the dances library. Async. |
+| `set_volume(level)` | Sets output volume 0–100. Affects the assistant's voice, the chime, and timer announcements. |
+| `mute()` / `unmute()` | Silences / restores all output without losing the volume level. |
+| `who_called_me()` | Reads the SDK's direction-of-arrival, turns the head toward the speaker, returns the angle. |
+| `web_search(query)` | Bridges to OpenAI's hosted `web_search` tool via the Responses API (uses the same `OPENAI_API_KEY`). The only synchronous tool — the realtime loop blocks up to `WEB_SEARCH_TIMEOUT_S` for the result. |
+| `set_timer(seconds, label)` | Registers a countdown. When it fires, plays the chime and opens a brief realtime session to announce the label. |
+
+Implementation notes:
+
+- All tool handlers live in `TOOL_HANDLERS` in `realtime.py`. Each tool is
+  a `_<name>_schema()` builder + `_tool_<name>(reachy_mini, args, ctx)`
+  handler — adding a tool is one place.
+- A device-wide `_realtime_session_lock` ensures only one realtime
+  session runs at a time. A timer firing while the user is mid-turn waits
+  for the turn to end (up to 30 s) before announcing.
+- The antenna wave acquires a `motion_lock` per `set_target` tick, while
+  emotion / dance clips hold it for the whole `play_move` — so the wave
+  doesn't fight body animations.
+- `web_search` errors (timeout, no network, etc.) are returned to the
+  model as a structured error so it can apologise rather than crash.
 
 ### System prompt
 

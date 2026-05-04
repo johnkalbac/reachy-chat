@@ -27,7 +27,13 @@ from scipy.signal import resample_poly
 from reachy_mini import ReachyMini, ReachyMiniApp
 from reachy_mini.utils import create_head_pose
 
-from reachy_chat.realtime import realtime_turn, warm_emotions
+from reachy_chat import timers
+from reachy_chat.realtime import (
+    apply_output_volume,
+    play_ready_chime,
+    realtime_turn,
+    warm_libraries,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +52,9 @@ class ReachyChat(ReachyMiniApp):
         # Force ONNX backend; tflite-runtime has no wheel for Python 3.12 aarch64.
         model = WakeWordModel(wakeword_models=[WAKE_WORD], inference_framework="onnx")
 
-        # Warm the emotions library in the background so the first wake-word
-        # doesn't pay the (one-time) HuggingFace download.
-        threading.Thread(target=warm_emotions, name="warm-emotions", daemon=True).start()
+        # Warm the emotions + dances libraries in the background so the first
+        # wake-word doesn't pay the (one-time) HuggingFace download.
+        threading.Thread(target=warm_libraries, name="warm-libraries", daemon=True).start()
 
         logger.info("=" * 50)
         logger.info("REACHY CHAT STARTING")
@@ -57,6 +63,7 @@ class ReachyChat(ReachyMiniApp):
         logger.info("  frame: %d samples (%d ms)", FRAME_SAMPLES, FRAME_MS)
         logger.info("=" * 50)
 
+        timer_service: timers.TimerService | None = None
         try:
             reachy_mini.media.start_recording()
             reachy_mini.media.start_playing()
@@ -68,7 +75,11 @@ class ReachyChat(ReachyMiniApp):
                     f"SDK input rate {input_rate} != 16 kHz; resampling not implemented"
                 )
 
-            _play_ready_chime(reachy_mini, output_rate)
+            timer_service = timers.TimerService(reachy_mini, output_rate)
+            timer_service.start()
+            timers.set_service(timer_service)
+
+            play_ready_chime(reachy_mini, output_rate)
 
             buffer = np.empty(0, dtype=np.int16)
 
@@ -110,6 +121,9 @@ class ReachyChat(ReachyMiniApp):
                         while time.time() < drain_until:
                             reachy_mini.media.get_audio_sample()
         finally:
+            if timer_service is not None:
+                timers.set_service(None)
+                timer_service.stop()
             reachy_mini.media.stop_recording()
             reachy_mini.media.stop_playing()
 
@@ -130,22 +144,6 @@ def _do_nod(reachy_mini: ReachyMini) -> None:
         reachy_mini.goto_target(neutral, antennas=[0.0, 0.0], duration=0.25)
     except Exception:
         logger.exception("nod failed")
-
-
-def _play_ready_chime(reachy_mini: ReachyMini, output_rate: int) -> None:
-    """Two-note ascending chime (A5 -> E6) signalling 'listening for wake word'."""
-    note_s = 0.12
-    gap_s = 0.03
-    n = int(output_rate * note_s)
-    t = np.arange(n, dtype=np.float32) / output_rate
-    # Quick attack, longer decay so the notes don't click.
-    envelope = np.minimum(t / 0.01, np.exp(-(t - 0.01) / 0.05)).astype(np.float32)
-    tone1 = (np.sin(2 * np.pi * 880.0 * t) * envelope * 0.3).astype(np.float32)
-    tone2 = (np.sin(2 * np.pi * 1318.5 * t) * envelope * 0.3).astype(np.float32)
-    gap = np.zeros(int(output_rate * gap_s), dtype=np.float32)
-    chime = np.concatenate([tone1, gap, tone2])
-    reachy_mini.media.push_audio_sample(chime.reshape(-1, 1))
-    time.sleep(len(chime) / output_rate + 0.05)
 
 
 def _speak(reachy_mini: ReachyMini, text: str, output_rate: int) -> None:
@@ -180,7 +178,7 @@ def _speak(reachy_mini: ReachyMini, text: str, output_rate: int) -> None:
         floats = resample_poly(floats, up=output_rate // g, down=sample_rate // g)
         floats = floats.astype(np.float32)
 
-    reachy_mini.media.push_audio_sample(floats.reshape(-1, 1))
+    reachy_mini.media.push_audio_sample(apply_output_volume(floats).reshape(-1, 1))
     # push_audio_sample is non-blocking; sleep for the playback duration plus a margin.
     time.sleep(len(floats) / output_rate + 0.1)
 
