@@ -43,7 +43,7 @@ SDK_INPUT_RATE = 16_000  # mic is 16 kHz.
 
 WAVE_AMPLITUDE_DEG = 15.0  # peak antenna deflection while assistant is speaking.
 WAVE_FREQ_HZ = 0.8         # full cycles per second.
-WAVE_TICK_S = 0.02         # ~50 Hz update rate for set_target.
+WAVE_TICK_S = 0.04         # 25 Hz update rate for set_target — gentle on the motor bus.
 
 EMOTIONS_LIBRARY = "pollen-robotics/reachy-mini-emotions-library"
 DANCES_LIBRARY = "pollen-robotics/reachy-mini-dances-library"
