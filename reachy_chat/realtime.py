@@ -49,7 +49,7 @@ EMOTIONS_LIBRARY = "pollen-robotics/reachy-mini-emotions-library"
 DANCES_LIBRARY = "pollen-robotics/reachy-mini-dances-library"
 RECORDED_MOVE_GOTO_DURATION_S = 0.5
 
-WEB_SEARCH_MODEL = "gpt-5-mini"
+WEB_SEARCH_MODEL = "gpt-4o-mini"
 WEB_SEARCH_TIMEOUT_S = 15.0
 DOA_HEAD_TURN_DURATION_S = 0.4
 DOA_YAW_LIMIT_RAD = float(np.pi / 2)
