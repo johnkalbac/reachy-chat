@@ -303,10 +303,17 @@ def _run_realtime_turn(reachy_mini: ReachyMini, stop_event: threading.Event, out
         wave_stop.set()
         if wave_thread is not None:
             wave_thread.join(timeout=0.5)
-            try:
-                reachy_mini.goto_target(create_head_pose(), antennas=[0.0, 0.0], duration=0.2)
-            except Exception:
-                logger.exception("returning antennas to neutral failed")
+            # Wait out any in-flight recorded move so we don't tug the antennas
+            # away from its targets mid-clip; cap the wait so we never hang.
+            if motion_lock.acquire(timeout=10.0):
+                try:
+                    reachy_mini.goto_target(create_head_pose(), antennas=[0.0, 0.0], duration=0.2)
+                except Exception:
+                    logger.exception("returning antennas to neutral failed")
+                finally:
+                    motion_lock.release()
+            else:
+                logger.warning("could not acquire motion_lock to reset antennas; skipping")
 
 
 # --- Public: announce a message via a one-shot realtime session ----------
@@ -403,6 +410,12 @@ def _wave_antennas(
         while not stop_flag.is_set():
             offset = float(amplitude * np.sin(omega * (time.monotonic() - t0)))
             with motion_lock:
+                # Re-check inside the lock: while we were waiting for it (e.g.
+                # a recorded move was running), the turn may have ended.
+                # Without this, we'd snap the antennas to a non-zero sine
+                # position right after the end-of-turn goto_target.
+                if stop_flag.is_set():
+                    break
                 reachy_mini.set_target(head=neutral, antennas=[offset, -offset])
             time.sleep(WAVE_TICK_S)
     except Exception:
@@ -725,7 +738,7 @@ def _tool_web_search(reachy_mini: ReachyMini, args: dict, ctx: dict) -> dict:
             resp = bounded.responses.create(
                 model=WEB_SEARCH_MODEL,
                 tools=[{"type": tool_type}],
-                reasoning={"effort": "minimal"},
+                reasoning={"effort": "low"},
                 input=prompt,
             )
             answer = (getattr(resp, "output_text", "") or "").strip()
