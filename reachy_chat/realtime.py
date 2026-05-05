@@ -45,11 +45,15 @@ WAVE_AMPLITUDE_DEG = 15.0  # peak antenna deflection while assistant is speaking
 WAVE_FREQ_HZ = 0.8         # full cycles per second.
 WAVE_TICK_S = 0.04         # 25 Hz update rate for set_target — gentle on the motor bus.
 
+WAGGLE_AMPLITUDE_DEG = 30.0  # wider than the speaking wave so it reads as an alert.
+WAGGLE_FREQ_HZ = 3.0
+WAGGLE_DURATION_S = 1.2
+
 EMOTIONS_LIBRARY = "pollen-robotics/reachy-mini-emotions-library"
 DANCES_LIBRARY = "pollen-robotics/reachy-mini-dances-library"
 RECORDED_MOVE_GOTO_DURATION_S = 0.5
 
-WEB_SEARCH_MODEL = "gpt-4o-mini"
+WEB_SEARCH_MODEL = "gpt-5-mini"
 WEB_SEARCH_TIMEOUT_S = 15.0
 DOA_HEAD_TURN_DURATION_S = 0.4
 DOA_YAW_LIMIT_RAD = float(np.pi / 2)
@@ -134,6 +138,26 @@ def play_ready_chime(reachy_mini: ReachyMini, output_rate: int) -> None:
     chime = np.concatenate([tone1, gap, tone2])
     reachy_mini.media.push_audio_sample(apply_output_volume(chime).reshape(-1, 1))
     time.sleep(len(chime) / output_rate + 0.05)
+
+
+def waggle_antennas(reachy_mini: ReachyMini, duration: float = WAGGLE_DURATION_S) -> None:
+    """Short, snappy antisymmetric antenna waggle to mark a notable event.
+
+    Distinct from the speaking-time `_wave_antennas`: wider amplitude, faster,
+    runs synchronously, and returns the antennas to neutral when done.
+    """
+    amplitude = np.deg2rad(WAGGLE_AMPLITUDE_DEG)
+    omega = 2 * np.pi * WAGGLE_FREQ_HZ
+    neutral = create_head_pose()
+    t0 = time.monotonic()
+    try:
+        while time.monotonic() - t0 < duration:
+            offset = float(amplitude * np.sin(omega * (time.monotonic() - t0)))
+            reachy_mini.set_target(head=neutral, antennas=[offset, -offset])
+            time.sleep(WAVE_TICK_S)
+        reachy_mini.set_target(head=neutral, antennas=[0.0, 0.0])
+    except Exception:
+        logger.exception("antenna waggle failed")
 
 
 # --- Public: warm caches at app startup ----------------------------------
@@ -701,6 +725,7 @@ def _tool_web_search(reachy_mini: ReachyMini, args: dict, ctx: dict) -> dict:
             resp = bounded.responses.create(
                 model=WEB_SEARCH_MODEL,
                 tools=[{"type": tool_type}],
+                reasoning={"effort": "minimal"},
                 input=prompt,
             )
             answer = (getattr(resp, "output_text", "") or "").strip()

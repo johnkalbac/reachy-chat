@@ -100,13 +100,17 @@ class TimerService:
     def _fire(self, entry: _Entry) -> None:
         # Imported lazily to avoid a circular import (realtime.py imports timers
         # for the set_timer tool handler).
-        from reachy_chat.realtime import announce_via_realtime, play_ready_chime
+        from reachy_chat.realtime import announce_via_realtime, play_ready_chime, waggle_antennas
 
         logger.info("firing timer #%d (%r)", entry.timer_id, entry.label)
         try:
             play_ready_chime(self.reachy_mini, self.output_rate)
         except Exception:
             logger.exception("ready chime failed during timer fire")
+        try:
+            waggle_antennas(self.reachy_mini)
+        except Exception:
+            logger.exception("antenna waggle failed during timer fire")
         message = f"Timer {entry.label} is done." if entry.label else "Timer's up."
         announce_via_realtime(self.reachy_mini, self.output_rate, message)
 
