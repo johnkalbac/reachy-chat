@@ -7,7 +7,8 @@
       "WebFetch(domain:picovoice.ai)",
       "WebFetch(domain:console.picovoice.ai)",
       "WebSearch",
-      "WebFetch(domain:platform.openai.com)"
+      "WebFetch(domain:platform.openai.com)",
+      "Bash(python -c \"import reachy_mini; print\\(reachy_mini.__file__\\)\")"
     ]
   }
 }
