@@ -18,6 +18,7 @@ dependencies = [
     "requests",
     "tqdm",
     "openai>=1.50",
+    "google-genai>=0.3",
     # openwakeword is intentionally NOT listed: its setup pins tflite-runtime,
     # which has no wheel for Python 3.12 on aarch64 (the daemon's apps venv).
     # Install it separately with --no-deps; we use the ONNX backend.

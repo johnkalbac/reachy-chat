@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Reachy Mini Python app: package with a `[project.entry-points."reachy_mini_apps"]` entry in [pyproject.toml](pyproject.toml). Current behavior: wake-word ("hey jarvis") → one-shot OpenAI Realtime API conversation (audio in, audio out over WebSocket) → return to wake-word listening. Single-turn — no conversation memory across detections yet.
+A Reachy Mini Python app: package with a `[project.entry-points."reachy_mini_apps"]` entry in [pyproject.toml](pyproject.toml). Current behavior: wake-word ("hey jarvis") → one-shot voice conversation (audio in, audio out over WebSocket) → return to wake-word listening. Single-turn — no conversation memory across detections yet.
+
+The realtime backend is selectable at runtime via the `REACHY_CHAT_PROVIDER` env var: `openai` (default — OpenAI Realtime API, needs `OPENAI_API_KEY`) or `gemini` (Gemini Live API, needs `GEMINI_API_KEY`). Dispatch lives in [reachy_chat/realtime.py](reachy_chat/realtime.py) (`realtime_turn()`, `announce_via_realtime()`); the Gemini implementation is [reachy_chat/gemini.py](reachy_chat/gemini.py). Both providers share the tool registry, motion lock, antenna wave, audio path, and prompt loading — only the wire protocol differs. When provider=gemini the `web_search` function tool is replaced by Gemini's built-in `google_search` grounding so a Gemini-only deployment doesn't need an OpenAI key.
 
 ## Where the code actually runs
 
@@ -78,7 +80,7 @@ The path is module-relative (one directory up from `realtime.py`), which assumes
 ## Non-obvious gotchas — do not "clean up" these
 
 - **Post-detection feature-buffer flush** in [reachy_chat/main.py](reachy_chat/main.py): after a wake-word fires (and the realtime turn returns), the code feeds 25 frames of silence into the wake-word model and drains ~0.3 s of mic audio. openWakeWord keeps a rolling ~1.5 s feature buffer; `model.reset()` only clears the prediction buffer, not the feature buffer, so without this flush the next `predict()` retriggers on the same audio. Don't replace it with `model.reset()`. The flush is *also* needed because the wake-word loop is paused for the full duration of the realtime turn — the feature buffer doesn't roll on its own.
-- **`OPENAI_API_KEY` must be set in the systemd unit, not just an interactive shell.** The daemon doesn't inherit your login env. Use `sudo systemctl edit reachy-mini-daemon` and add `Environment=OPENAI_API_KEY=...` under `[Service]`, then restart. Verify with `systemctl show reachy-mini-daemon -p Environment`.
+- **`OPENAI_API_KEY` (or `GEMINI_API_KEY`, when `REACHY_CHAT_PROVIDER=gemini`) must be set in the systemd unit, not just an interactive shell.** The daemon doesn't inherit your login env. Use `sudo systemctl edit reachy-mini-daemon` and add `Environment=OPENAI_API_KEY=...` (and/or `Environment=GEMINI_API_KEY=...`, `Environment=REACHY_CHAT_PROVIDER=gemini`) under `[Service]`, then restart. Verify with `systemctl show reachy-mini-daemon -p Environment`.
 - **OpenAI Realtime requires 24 kHz PCM16 mono** in both directions; the SDK gives us 16 kHz. `realtime_turn` resamples 16 kHz → 24 kHz on the way up (`resample_poly(up=3, down=2)`) and 24 kHz → SDK output rate on the way down. Don't strip the resampling thinking the SDK can negotiate it — the API can't.
 - **`openwakeword` is intentionally absent from `pyproject.toml` `dependencies`**. Its setup pins `tflite-runtime`, which has no wheel for Python 3.12 on aarch64 (the daemon's apps venv). Install it with `pip install --no-deps openwakeword` and force the ONNX backend (`inference_framework="onnx"` — already set in `run()`). Don't add it to `dependencies`; don't drop the `--no-deps` from the README.
 - **espeak-ng is a system dependency**, not a Python one — installed once via `sudo apt install espeak-ng`. The app shells out to it. Currently only used by the unused-on-happy-path `_speak()` helper.

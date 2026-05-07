@@ -13,9 +13,11 @@ tags:
 # reachy-chat
 
 An AI-enabled chat assistant for the Reachy Mini Wireless. Wake on a
-keyword, then have a one-shot voice conversation with OpenAI's Realtime
-API: the user's request streams up over WebSocket, the assistant's audio
-reply streams back to the speaker, and we return to wake-word listening.
+keyword, then have a one-shot voice conversation with either OpenAI's
+Realtime API or Google's Gemini Live API (selectable at runtime via
+`REACHY_CHAT_PROVIDER`): the user's request streams up over WebSocket,
+the assistant's audio reply streams back to the speaker, and we return
+to wake-word listening.
 
 The wake word right now is **"hey jarvis"**, not "Reachy". Reason:
 [openWakeWord](https://github.com/dscripka/openWakeWord) is fully
@@ -99,23 +101,32 @@ multi-second delay on the first wake-word and the first dance.
 /venvs/apps_venv/bin/reachy-mini-app-assistant check .
 ```
 
-### 6. Provide the OpenAI API key to the daemon
+### 6. Provide the API key(s) to the daemon
 
-The app reads `OPENAI_API_KEY` from its process environment. The daemon
-runs under systemd and does not inherit your interactive shell — the key
-has to be set in the unit itself. Use a drop-in:
+The app reads `OPENAI_API_KEY` and/or `GEMINI_API_KEY` from its process
+environment. The daemon runs under systemd and does not inherit your
+interactive shell — keys have to be set in the unit itself. Setting
+both side-by-side is safe: each provider reads only its own key, and
+flipping `REACHY_CHAT_PROVIDER` (then restarting) is the only move
+needed to switch backends. Use a drop-in:
 
 ```bash
 sudo systemctl edit reachy-mini-daemon
-# In the editor that opens, add:
+# In the editor that opens, add the keys you want plus the provider toggle:
 # [Service]
 # Environment=OPENAI_API_KEY=sk-...
+# Environment=GEMINI_API_KEY=...
+# Environment=REACHY_CHAT_PROVIDER=openai   # or "gemini"
 sudo systemctl restart reachy-mini-daemon
 ```
 
-Verify the daemon sees it:
+`REACHY_CHAT_PROVIDER` defaults to `openai` if unset. To switch later,
+re-run `sudo systemctl edit reachy-mini-daemon`, change the value, and
+restart — no reinstall.
+
+Verify the daemon sees them:
 ```bash
-sudo systemctl show reachy-mini-daemon -p Environment | grep OPENAI_API_KEY
+sudo systemctl show reachy-mini-daemon -p Environment
 ```
 
 ## Running
@@ -169,7 +180,15 @@ Wake-word constants at the top of [`reachy_chat/main.py`](reachy_chat/main.py):
 | `WAKE_WORD_THRESHOLD` | `0.5` | Detection score cutoff in [0, 1]. Raise if you get false triggers; lower if it misses. |
 | `GREETING` | `"hello"` | Fallback espeak-ng phrase. Unused on the happy path; kept for offline diagnostics. |
 
-Realtime constants at the top of [`reachy_chat/realtime.py`](reachy_chat/realtime.py):
+Provider selection (env var, read each turn):
+
+| Env var | Default | What it controls |
+|---|---|---|
+| `REACHY_CHAT_PROVIDER` | `openai` | Which realtime backend to use. Set to `gemini` to use Gemini Live. |
+| `OPENAI_API_KEY` | _(unset)_ | Auth for the OpenAI Realtime API and the `web_search` tool's Responses-API call. Required when provider is `openai`. |
+| `GEMINI_API_KEY` | _(unset)_ | Auth for the Gemini Live API. Required when provider is `gemini`. `GOOGLE_API_KEY` is also accepted. |
+
+Realtime constants at the top of [`reachy_chat/realtime.py`](reachy_chat/realtime.py) (OpenAI backend):
 
 | Constant | Default | What it controls |
 |---|---|---|
@@ -182,6 +201,18 @@ Realtime constants at the top of [`reachy_chat/realtime.py`](reachy_chat/realtim
 | `WEB_SEARCH_MODEL` | `"gpt-5-mini"` | Model used for the Responses API call backing `web_search`. |
 | `WEB_SEARCH_TIMEOUT_S` | `15.0` | Max time to wait for a search response before erroring back to the model. |
 | `ANNOUNCE_MAX_S` | `15.0` | Cap on the timer-fired announcement realtime session. |
+
+Gemini constants at the top of [`reachy_chat/gemini.py`](reachy_chat/gemini.py) (Gemini Live backend):
+
+| Constant | Default | What it controls |
+|---|---|---|
+| `GEMINI_MODEL` | `"gemini-3.1-flash-live-preview"` | Gemini Live model id. Adjust if Google's preview ships under a different name. |
+| `GEMINI_VOICE` | `"Aoede"` | Prebuilt voice — also `Puck`, `Charon`, `Kore`, `Fenrir`. |
+
+`MAX_TURN_S` and `ANNOUNCE_MAX_S` from `realtime.py` apply to both
+backends. The Gemini backend swaps the OpenAI-backed `web_search`
+function tool for Gemini's built-in `google_search` grounding, so a
+Gemini-only deployment doesn't need an OpenAI key.
 
 ### Realtime tools
 
@@ -196,7 +227,7 @@ etc.) are omitted automatically, so a partial environment still works.
 | `set_volume(level)` | Sets output volume 0–100. Affects the assistant's voice, the chime, and timer announcements. |
 | `mute()` / `unmute()` | Silences / restores all output without losing the volume level. |
 | `who_called_me()` | Reads the SDK's direction-of-arrival, turns the head toward the speaker, returns the angle. |
-| `web_search(query)` | Bridges to OpenAI's hosted `web_search` tool via the Responses API (uses the same `OPENAI_API_KEY`). The only synchronous tool — the realtime loop blocks up to `WEB_SEARCH_TIMEOUT_S` for the result. |
+| `web_search(query)` | When provider is `openai`: bridges to OpenAI's hosted `web_search` via the Responses API (uses the same `OPENAI_API_KEY`); the only synchronous tool — the realtime loop blocks up to `WEB_SEARCH_TIMEOUT_S` for the result. When provider is `gemini`: this function tool is replaced by Gemini's built-in `google_search` grounding, handled inside the model. |
 | `set_timer(seconds, label)` | Registers a countdown. When it fires, plays the chime and opens a brief realtime session to announce the label. |
 
 Implementation notes:

@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import threading
 import time
 from math import gcd
@@ -34,6 +35,10 @@ from reachy_mini.motion.recorded_move import RecordedMoves
 from reachy_mini.utils import create_head_pose
 
 logger = logging.getLogger(__name__)
+
+PROVIDER_ENV = "REACHY_CHAT_PROVIDER"
+PROVIDER_OPENAI = "openai"
+PROVIDER_GEMINI = "gemini"
 
 REALTIME_MODEL = "gpt-realtime"
 REALTIME_RATE = 24_000  # OpenAI Realtime default: PCM16 mono @ 24 kHz, both directions.
@@ -193,12 +198,23 @@ def _get_recorded_moves(library_id: str) -> RecordedMoves | None:
 # --- Public: realtime turn ------------------------------------------------
 
 def realtime_turn(reachy_mini: ReachyMini, stop_event: threading.Event, output_rate: int) -> None:
-    """One full conversational turn: user speaks, model replies, session closes."""
+    """One full conversational turn: user speaks, model replies, session closes.
+
+    Dispatches to the OpenAI Realtime or Gemini Live backend based on
+    `REACHY_CHAT_PROVIDER` (default `openai`).
+    """
     if not _realtime_session_lock.acquire(timeout=5.0):
         logger.warning("could not acquire realtime lock within 5s; skipping turn")
         return
     try:
-        _run_realtime_turn(reachy_mini, stop_event, output_rate)
+        provider = _get_provider()
+        if provider == PROVIDER_GEMINI:
+            from reachy_chat import gemini
+            instructions = _load_instructions()
+            tools = _build_tools()
+            gemini.run_gemini_turn(reachy_mini, stop_event, output_rate, instructions, tools)
+        else:
+            _run_realtime_turn(reachy_mini, stop_event, output_rate)
     finally:
         _realtime_session_lock.release()
 
@@ -321,17 +337,27 @@ def _run_realtime_turn(reachy_mini: ReachyMini, stop_event: threading.Event, out
 def announce_via_realtime(reachy_mini: ReachyMini, output_rate: int, message: str) -> None:
     """Open a brief realtime session with a fixed instruction and play the reply.
 
-    No mic input — `conn.response.create()` triggers an immediate response.
+    No mic input — the session is triggered with a fixed text input.
     Used by the timer service to speak when a timer fires. Will wait up to
     30s to grab the realtime lock if a wake-word turn is in flight.
+    Dispatches to OpenAI or Gemini based on `REACHY_CHAT_PROVIDER`.
     """
     if not _realtime_session_lock.acquire(timeout=30.0):
         logger.warning("could not acquire realtime lock for announcement; skipping")
         return
     try:
-        _run_announcement(reachy_mini, output_rate, message)
+        provider = _get_provider()
+        if provider == PROVIDER_GEMINI:
+            from reachy_chat import gemini
+            gemini.run_gemini_announcement(reachy_mini, output_rate, message)
+        else:
+            _run_announcement(reachy_mini, output_rate, message)
     finally:
         _realtime_session_lock.release()
+
+
+def _get_provider() -> str:
+    return (os.environ.get(PROVIDER_ENV) or PROVIDER_OPENAI).strip().lower()
 
 
 def _run_announcement(reachy_mini: ReachyMini, output_rate: int, message: str) -> None:
@@ -472,23 +498,7 @@ def _handle_function_call(
     call_id = getattr(event, "call_id", None)
     name = getattr(event, "name", None)
     raw_args = getattr(event, "arguments", "") or ""
-    try:
-        args = json.loads(raw_args) if raw_args else {}
-    except json.JSONDecodeError:
-        logger.exception("malformed tool arguments: %r", raw_args)
-        args = {}
-
-    handler = TOOL_HANDLERS.get(name)
-    if handler is None:
-        logger.warning("unknown tool %r requested by model", name)
-        output: dict = {"status": "error", "reason": f"unknown_tool:{name}"}
-    else:
-        logger.info("tool %s(%s) requested", name, args)
-        try:
-            output = handler(reachy_mini, args, ctx)
-        except Exception as e:
-            logger.exception("tool %s handler raised", name)
-            output = {"status": "error", "reason": f"{type(e).__name__}: {e}"}
+    output = _dispatch_tool_call(reachy_mini, name, raw_args, ctx)
 
     if call_id:
         try:
@@ -499,6 +509,41 @@ def _handle_function_call(
             })
         except Exception:
             logger.exception("sending function_call_output failed")
+
+
+def _dispatch_tool_call(
+    reachy_mini: ReachyMini,
+    name: str | None,
+    raw_args: str | dict | None,
+    ctx: dict[str, Any],
+) -> dict:
+    """Run the named tool from `TOOL_HANDLERS` and return its result dict.
+
+    `raw_args` may be a JSON string (OpenAI) or an already-decoded dict (Gemini).
+    Provider-specific code is responsible for shipping the returned dict back
+    to the model.
+    """
+    if isinstance(raw_args, dict):
+        args = raw_args
+    elif isinstance(raw_args, str) and raw_args:
+        try:
+            args = json.loads(raw_args)
+        except json.JSONDecodeError:
+            logger.exception("malformed tool arguments: %r", raw_args)
+            args = {}
+    else:
+        args = {}
+
+    handler = TOOL_HANDLERS.get(name) if name else None
+    if handler is None:
+        logger.warning("unknown tool %r requested by model", name)
+        return {"status": "error", "reason": f"unknown_tool:{name}"}
+    logger.info("tool %s(%s) requested", name, args)
+    try:
+        return handler(reachy_mini, args, ctx)
+    except Exception as e:
+        logger.exception("tool %s handler raised", name)
+        return {"status": "error", "reason": f"{type(e).__name__}: {e}"}
 
 
 # --- Tool: play_emotion ---------------------------------------------------
