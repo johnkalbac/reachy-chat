@@ -36,7 +36,7 @@ from reachy_chat.realtime import (
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-3.1-flash-live-preview"
+GEMINI_MODEL = "gemini-3.1-flash-live"
 GEMINI_INPUT_RATE = 16_000   # Matches the SDK's mic rate; no resample needed.
 GEMINI_OUTPUT_RATE = 24_000  # PCM16 mono @ 24 kHz from the server.
 GEMINI_VOICE = "Aoede"       # Prebuilt voices: Puck, Charon, Kore, Fenrir, Aoede.
@@ -97,7 +97,9 @@ async def _run_gemini_turn_async(
     from google import genai
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    client = genai.Client(api_key=api_key)
+    # Live (BidiGenerateContent) is only exposed under v1beta; the default
+    # client may fall through to v1 for some preview models.
+    client = genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
     config = _build_gemini_config(instructions, oai_tools)
 
     deadline = time.monotonic() + MAX_TURN_S
@@ -246,7 +248,7 @@ async def _run_gemini_announcement_async(
     from google.genai import types
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
 
     instructions = f"Say exactly the following sentence and nothing else: {message}"
     config = {
