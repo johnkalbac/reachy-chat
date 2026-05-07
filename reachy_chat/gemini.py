@@ -36,7 +36,7 @@ from reachy_chat.realtime import (
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-3.1-flash-live"
+GEMINI_MODEL = "gemini-3.1-flash-live-preview"
 GEMINI_INPUT_RATE = 16_000   # Matches the SDK's mic rate; no resample needed.
 GEMINI_OUTPUT_RATE = 24_000  # PCM16 mono @ 24 kHz from the server.
 GEMINI_VOICE = "Aoede"       # Prebuilt voices: Puck, Charon, Kore, Fenrir, Aoede.
