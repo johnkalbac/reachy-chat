@@ -578,6 +578,9 @@ def _tool_play_emotion(reachy_mini: ReachyMini, args: dict, ctx: dict) -> dict:
     name = args.get("name")
     if not name:
         return {"status": "error", "reason": "missing_name"}
+    err = _validate_recorded_move(EMOTIONS_LIBRARY, name)
+    if err is not None:
+        return err
     threading.Thread(
         target=_execute_recorded_move,
         args=(reachy_mini, EMOTIONS_LIBRARY, name, ctx["motion_lock"]),
@@ -619,6 +622,9 @@ def _tool_play_dance(reachy_mini: ReachyMini, args: dict, ctx: dict) -> dict:
     name = args.get("name")
     if not name:
         return {"status": "error", "reason": "missing_name"}
+    err = _validate_recorded_move(DANCES_LIBRARY, name)
+    if err is not None:
+        return err
     threading.Thread(
         target=_execute_recorded_move,
         args=(reachy_mini, DANCES_LIBRARY, name, ctx["motion_lock"]),
@@ -626,6 +632,22 @@ def _tool_play_dance(reachy_mini: ReachyMini, args: dict, ctx: dict) -> dict:
         daemon=True,
     ).start()
     return {"status": "started", "dance": name}
+
+
+def _validate_recorded_move(library_id: str, name: str) -> dict | None:
+    """Return an error dict if `name` is unknown in `library_id`, else None.
+
+    The realtime model occasionally hallucinates clip names despite the
+    schema enum, so validating here lets us tell the model it picked a
+    bad name instead of failing silently in the worker thread.
+    """
+    moves = _get_recorded_moves(library_id)
+    if moves is None:
+        return {"status": "error", "reason": "library_unavailable"}
+    if name not in set(moves.list_moves()):
+        logger.warning("clip %r not in library %s; rejecting tool call", name, library_id)
+        return {"status": "error", "reason": f"unknown_clip:{name}"}
+    return None
 
 
 def _execute_recorded_move(
@@ -640,8 +662,10 @@ def _execute_recorded_move(
         return
     try:
         move = moves.get(name)
-    except Exception:
-        logger.exception("clip %r not found in %s", name, library_id)
+    except Exception as e:
+        # Should be unreachable: tool handlers validate `name` via
+        # `_validate_recorded_move` before kicking off this thread.
+        logger.warning("clip %r unexpectedly missing from %s: %s", name, library_id, e)
         return
     try:
         with motion_lock:
