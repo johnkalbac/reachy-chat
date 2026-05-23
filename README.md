@@ -2,10 +2,10 @@
 
 An AI-enabled chat assistant for the Reachy Mini Wireless. Wake on a
 keyword, then have a one-shot voice conversation with either OpenAI's
-Realtime API or Google's Gemini Live API (selectable at runtime via
-`REACHY_CHAT_PROVIDER`): the user's request streams up over WebSocket,
-the assistant's audio reply streams back to the speaker, and we return
-to wake-word listening.
+Realtime API or Google's Gemini Live API (selectable in
+[`config.toml`](config.toml)): the user's request streams up over
+WebSocket, the assistant's audio reply streams back to the speaker, and
+we return to wake-word listening.
 
 The wake word right now is **"hey jarvis"**, not "Reachy". Reason:
 [openWakeWord](https://github.com/dscripka/openWakeWord) is fully
@@ -92,30 +92,33 @@ multi-second delay on the first wake-word and the first dance.
 ### 6. Provide the API key(s) to the daemon
 
 The app reads `OPENAI_API_KEY` and/or `GEMINI_API_KEY` from its process
-environment. The daemon runs under systemd and does not inherit your
-interactive shell — keys have to be set in the unit itself. Setting
-both side-by-side is safe: each provider reads only its own key, and
-flipping `REACHY_CHAT_PROVIDER` (then restarting) is the only move
-needed to switch backends. Use a drop-in:
+environment — these are secrets, so they live in the systemd unit and
+not in `config.toml`. The daemon runs under systemd and does not
+inherit your interactive shell, so the keys have to be set in the unit
+itself. Setting both side-by-side is safe: each provider reads only
+its own key, and switching backends is a `config.toml` edit (plus app
+restart) — no env change needed. Use a drop-in:
 
 ```bash
 sudo systemctl edit reachy-mini-daemon
-# In the editor that opens, add the keys you want plus the provider toggle:
+# In the editor that opens, add whichever keys you need:
 # [Service]
 # Environment=OPENAI_API_KEY=sk-...
 # Environment=GEMINI_API_KEY=...
-# Environment=REACHY_CHAT_PROVIDER=openai   # or "gemini"
 sudo systemctl restart reachy-mini-daemon
 ```
-
-`REACHY_CHAT_PROVIDER` defaults to `openai` if unset. To switch later,
-re-run `sudo systemctl edit reachy-mini-daemon`, change the value, and
-restart — no reinstall.
 
 Verify the daemon sees them:
 ```bash
 sudo systemctl show reachy-mini-daemon -p Environment
 ```
+
+### 7. Pick the realtime backend
+
+Open [`config.toml`](config.toml) and set `provider.name` to `"openai"`
+or `"gemini"`. The default is `"openai"`. After editing, restart the
+app (Stop + Start in the dashboard, or `reachy-mini-daemon` itself if
+the app was already running).
 
 ## Running
 
@@ -160,47 +163,42 @@ clone (`c:\git\github\reachy-chat`) when you want a local mirror.
 
 ## Tuning
 
-Wake-word constants at the top of [`reachy_chat/main.py`](reachy_chat/main.py):
+The non-secret tunables live in [`config.toml`](config.toml) at the repo
+root. It's the single source of truth — edit a value, restart the app,
+and the new value is in effect. The file is grouped into sections by
+concern; each value has an inline comment explaining what it does.
 
-| Constant | Default | What it controls |
-|---|---|---|
-| `WAKE_WORD` | `"hey_jarvis"` | Which openWakeWord model to listen for. Other built-ins: `alexa`, `hey_mycroft`, `hey_rhasspy`, `weather`, `timer`. |
-| `WAKE_WORD_THRESHOLD` | `0.5` | Detection score cutoff in [0, 1]. Raise if you get false triggers; lower if it misses. |
-| `GREETING` | `"hello"` | Fallback espeak-ng phrase. Unused on the happy path; kept for offline diagnostics. |
+| Section | Key | Default | What it controls |
+|---|---|---|---|
+| `[wake_word]` | `name` | `"hey_jarvis"` | Which openWakeWord model to listen for. Other built-ins: `alexa`, `hey_mycroft`, `hey_rhasspy`, `weather`, `timer`. |
+| `[wake_word]` | `threshold` | `0.5` | Detection score cutoff in [0, 1]. Raise if you get false triggers; lower if it misses. |
+| `[provider]` | `name` | `"openai"` | Which realtime backend to use. Set to `"gemini"` to use Gemini Live. |
+| `[openai]` | `model` | `"gpt-realtime"` | OpenAI Realtime model name. |
+| `[openai]` | `voice` | `"ballad"` | Output voice — also `marin`, `cedar`, etc. |
+| `[openai]` | `web_search_model` | `"gpt-4o-mini"` | Model used by the `web_search` tool's Responses-API call. Only consulted when `provider.name` is `"openai"`. |
+| `[openai]` | `web_search_timeout_s` | `15.0` | Max seconds to wait for a `web_search` response before erroring back to the model. |
+| `[gemini]` | `model` | `"gemini-3.1-flash-live-preview"` | Gemini Live model id. Adjust if Google's preview ships under a different name. |
+| `[gemini]` | `voice` | `"Iapetus"` | Prebuilt voice — also `Puck`, `Charon`, `Kore`, `Fenrir`, `Aoede`. |
+| `[timing]` | `announce_max_s` | `15.0` | Cap on the timer-fired announcement realtime session. |
+| `[timing]` | `followup_window_s` | `8.0` | Silence allowed after a model reply before the multi-turn session closes. |
+| `[timing]` | `max_session_s` | `180.0` | Whole multi-turn session cap, summed across every turn. |
+| `[timing]` | `max_turn_s` | `60.0` | Per-response cap; the model's reply alone can't exceed this. |
+| `[timing]` | `reset_to_neutral_duration_s` | `0.6` | Smooth antenna sweep back to neutral between speaking and listening. |
 
-Provider selection (env var, read each turn):
+Secrets live in the environment, not the config file:
 
-| Env var | Default | What it controls |
-|---|---|---|
-| `REACHY_CHAT_PROVIDER` | `openai` | Which realtime backend to use. Set to `gemini` to use Gemini Live. |
-| `OPENAI_API_KEY` | _(unset)_ | Auth for the OpenAI Realtime API and the `web_search` tool's Responses-API call. Required when provider is `openai`. |
-| `GEMINI_API_KEY` | _(unset)_ | Auth for the Gemini Live API. Required when provider is `gemini`. `GOOGLE_API_KEY` is also accepted. |
+| Env var | What it controls |
+|---|---|
+| `OPENAI_API_KEY` | Auth for the OpenAI Realtime API and the `web_search` tool's Responses-API call. Required when `provider.name` is `"openai"`. |
+| `GEMINI_API_KEY` | Auth for the Gemini Live API. Required when `provider.name` is `"gemini"`. `GOOGLE_API_KEY` is also accepted. |
 
-Realtime constants at the top of [`reachy_chat/realtime.py`](reachy_chat/realtime.py) (OpenAI backend):
-
-| Constant | Default | What it controls |
-|---|---|---|
-| `REALTIME_MODEL` | `"gpt-realtime"` | OpenAI Realtime model name. |
-| `REALTIME_VOICE` | `"ballad"` | Output voice — also `marin`, `cedar`, etc. |
-| `MAX_TURN_S` | `30.0` | Hard cap on a single conversational turn. |
-| `WAVE_AMPLITUDE_DEG` | `15.0` | Antenna sweep amplitude during the assistant's reply. |
-| `WAVE_FREQ_HZ` | `0.8` | Antenna sweep frequency. |
-| `RECORDED_MOVE_GOTO_DURATION_S` | `0.5` | Smoothing into the first pose of an emotion or dance clip. |
-| `WEB_SEARCH_MODEL` | `"gpt-5-mini"` | Model used for the Responses API call backing `web_search`. |
-| `WEB_SEARCH_TIMEOUT_S` | `15.0` | Max time to wait for a search response before erroring back to the model. |
-| `ANNOUNCE_MAX_S` | `15.0` | Cap on the timer-fired announcement realtime session. |
-
-Gemini constants at the top of [`reachy_chat/gemini.py`](reachy_chat/gemini.py) (Gemini Live backend):
-
-| Constant | Default | What it controls |
-|---|---|---|
-| `GEMINI_MODEL` | `"gemini-3.1-flash-live-preview"` | Gemini Live model id. Adjust if Google's preview ships under a different name. |
-| `GEMINI_VOICE` | `"Aoede"` | Prebuilt voice — also `Puck`, `Charon`, `Kore`, `Fenrir`. |
-
-`MAX_TURN_S` and `ANNOUNCE_MAX_S` from `realtime.py` apply to both
-backends. The Gemini backend swaps the OpenAI-backed `web_search`
-function tool for Gemini's built-in `google_search` grounding, so a
-Gemini-only deployment doesn't need an OpenAI key.
+Other constants that aren't worth surfacing (antenna wave shape,
+DOA limits, etc.) stay at the top of
+[`reachy_chat/realtime.py`](reachy_chat/realtime.py) and
+[`reachy_chat/gemini.py`](reachy_chat/gemini.py). The Gemini backend swaps
+the OpenAI-backed `web_search` function tool for Gemini's built-in
+`google_search` grounding, so a Gemini-only deployment doesn't need an
+OpenAI key.
 
 ### Realtime tools
 
@@ -247,3 +245,16 @@ fragments — so split your prompt into themed pieces (`role.md`,
   jarvis" again, and the new prompt is in effect — no app restart.
 - If `prompts/` is missing or empty, a short built-in default kicks in
   (`_DEFAULT_INSTRUCTIONS` in `realtime.py`).
+
+
+---
+title: reachy-chat
+emoji: 💬
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+tags:
+  - reachy_mini
+  - reachy_mini_python_app
+---

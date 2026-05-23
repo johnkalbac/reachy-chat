@@ -1,25 +1,22 @@
-"""Realtime-API-driven conversational turns and shared audio output state.
+"""Orchestration layer + shared infrastructure for realtime voice turns.
 
-`realtime_turn()` is called from the wake-word loop in main.py. It opens a
-WebSocket session against `gpt-realtime`, streams the user's request up,
-plays the assistant's audio reply back, and routes the model's function
-tool calls (play_emotion, play_dance, set_volume, mute, unmute,
-who_called_me, web_search, set_timer) through `TOOL_HANDLERS`.
+This module is provider-agnostic. The per-provider wire protocol lives in:
+- [reachy_chat.openai_realtime][] — OpenAI Realtime API backend
+- [reachy_chat.gemini_realtime][] — Gemini Live API backend
 
-`announce_via_realtime()` runs a one-shot realtime session with a fixed
-instruction and no microphone — used by the timer service to speak when
-a timer fires.
+`realtime_turn()` and `announce_via_realtime()` acquire a device-wide
+session lock and dispatch to one of those backends based on the
+`provider.name` value in `config.toml` (default `openai`).
 
-Auth: reads OPENAI_API_KEY from the environment. On the robot this must be
-set in the daemon's systemd unit, not just an interactive shell.
+Both backends share the tool registry (`TOOL_HANDLERS` + the `_tool_*`
+handlers), the motion lock + antenna wave helpers, the volume scaling
+state, the prompt loader, and the audio output path that live here.
 """
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
-import os
 import threading
 import time
 from math import gcd
@@ -27,27 +24,24 @@ from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
-from openai import OpenAI
 from scipy.signal import resample_poly
 
 from reachy_mini import ReachyMini
 from reachy_mini.motion.recorded_move import RecordedMoves
 from reachy_mini.utils import create_head_pose
 
+from reachy_chat.config import (
+    REACHY_CHAT_PROVIDER,
+    WEB_SEARCH_MODEL,
+    WEB_SEARCH_TIMEOUT_S,
+)
+
 logger = logging.getLogger(__name__)
 
-PROVIDER_ENV = "REACHY_CHAT_PROVIDER"
 PROVIDER_OPENAI = "openai"
 PROVIDER_GEMINI = "gemini"
 
-REALTIME_MODEL = "gpt-realtime"
-REALTIME_RATE = 24_000  # OpenAI Realtime default: PCM16 mono @ 24 kHz, both directions.
-REALTIME_VOICE = "ballad"
-MAX_TURN_S = 60.0  # per-response cap; the model's reply alone can't exceed this.
-MAX_SESSION_S = 180.0  # whole multi-turn session cap, summed across all turns.
-FOLLOWUP_WINDOW_S = 8.0  # silence allowed after a model reply before the session closes.
-RESET_TO_NEUTRAL_DURATION_S = 0.6  # smooth antenna sweep back to neutral between turns.
-SDK_INPUT_RATE = 16_000  # mic is 16 kHz.
+PROVIDER_AUDIO_RATE = 24_000  # Both OpenAI Realtime and Gemini Live deliver PCM16 mono @ 24 kHz.
 
 WAVE_AMPLITUDE_DEG = 15.0  # peak antenna deflection while assistant is speaking.
 WAVE_FREQ_HZ = 0.8         # full cycles per second.
@@ -63,12 +57,8 @@ EMOTIONS_LIBRARY = "pollen-robotics/reachy-mini-emotions-library"
 DANCES_LIBRARY = "pollen-robotics/reachy-mini-dances-library"
 RECORDED_MOVE_GOTO_DURATION_S = 0.5
 
-WEB_SEARCH_MODEL = "gpt-4o-mini"
-WEB_SEARCH_TIMEOUT_S = 15.0
 DOA_HEAD_TURN_DURATION_S = 0.4
 DOA_YAW_LIMIT_RAD = float(np.pi / 2)
-
-ANNOUNCE_MAX_S = 15.0  # cap on a single timer-announcement realtime session.
 
 # --- Module state ---------------------------------------------------------
 
@@ -205,209 +195,24 @@ def _get_recorded_moves(library_id: str) -> RecordedMoves | None:
 def realtime_turn(reachy_mini: ReachyMini, stop_event: threading.Event, output_rate: int) -> None:
     """One full conversational turn: user speaks, model replies, session closes.
 
-    Dispatches to the OpenAI Realtime or Gemini Live backend based on
-    `REACHY_CHAT_PROVIDER` (default `openai`).
+    Dispatches to the OpenAI Realtime or Gemini Live backend based on the
+    `provider.name` value in `config.toml` (default `openai`). Builds
+    `instructions` and `tools` once here so both backends see the same inputs.
     """
     if not _realtime_session_lock.acquire(timeout=5.0):
         logger.warning("could not acquire realtime lock within 5s; skipping turn")
         return
     try:
-        provider = _get_provider()
-        if provider == PROVIDER_GEMINI:
-            from reachy_chat import gemini
-            instructions = _load_instructions()
-            tools = _build_tools()
-            gemini.run_gemini_turn(reachy_mini, stop_event, output_rate, instructions, tools)
+        instructions = _load_instructions()
+        tools = _build_tools()
+        if REACHY_CHAT_PROVIDER == PROVIDER_GEMINI:
+            from reachy_chat import gemini_realtime
+            gemini_realtime.run_gemini_turn(reachy_mini, stop_event, output_rate, instructions, tools)
         else:
-            _run_realtime_turn(reachy_mini, stop_event, output_rate)
+            from reachy_chat import openai_realtime
+            openai_realtime.run_openai_turn(reachy_mini, stop_event, output_rate, instructions, tools)
     finally:
         _realtime_session_lock.release()
-
-
-def _run_realtime_turn(reachy_mini: ReachyMini, stop_event: threading.Event, output_rate: int) -> None:
-    """Open one multi-turn realtime session.
-
-    A session contains one or more model responses. After each response the
-    robot enters a `FOLLOWUP_WINDOW_S` listening window with a slow antenna
-    waggle; if the user starts speaking, that becomes the next turn. The
-    session ends when the window elapses with no speech, the server errors,
-    `stop_event` is set, or `MAX_SESSION_S` is reached.
-    """
-    client = OpenAI()
-    session_deadline = time.monotonic() + MAX_SESSION_S
-    turn_deadline = time.monotonic() + MAX_TURN_S
-    followup_deadline: float | None = None  # set while in the listening window.
-
-    producer_done = threading.Event()
-    motion_lock = threading.Lock()
-
-    wave_stop = threading.Event()
-    wave_thread: threading.Thread | None = None
-    listening_wave_stop = threading.Event()
-    listening_wave_thread: threading.Thread | None = None
-
-    instructions = _load_instructions()
-    tools = _build_tools()
-    need_continuation = False
-
-    ctx: dict[str, Any] = {
-        "client": client,
-        "motion_lock": motion_lock,
-        "output_rate": output_rate,
-    }
-
-    def _reset_antennas_to_neutral() -> None:
-        # Short timeout: a recorded move can hold the lock for many seconds,
-        # in which case we'd rather skip the cosmetic reset than block.
-        if not motion_lock.acquire(timeout=2.0):
-            logger.warning("could not acquire motion_lock for neutral reset; skipping")
-            return
-        try:
-            reachy_mini.goto_target(
-                create_head_pose(),
-                antennas=[0.0, 0.0],
-                duration=RESET_TO_NEUTRAL_DURATION_S,
-            )
-        except Exception:
-            logger.exception("returning antennas to neutral failed")
-        finally:
-            motion_lock.release()
-
-    def _enter_listening() -> None:
-        nonlocal wave_thread, listening_wave_thread, followup_deadline
-        if wave_thread is not None:
-            wave_stop.set()
-            wave_thread.join(timeout=0.5)
-            wave_thread = None
-            wave_stop.clear()
-        _reset_antennas_to_neutral()
-        listening_wave_stop.clear()
-        listening_wave_thread = threading.Thread(
-            target=_wave_antennas_listening,
-            args=(reachy_mini, listening_wave_stop, motion_lock),
-            name="realtime-listening-wave",
-            daemon=True,
-        )
-        listening_wave_thread.start()
-        followup_deadline = time.monotonic() + FOLLOWUP_WINDOW_S
-        logger.info("entering follow-up listening window (%.0fs)", FOLLOWUP_WINDOW_S)
-
-    def _exit_listening() -> None:
-        nonlocal listening_wave_thread, followup_deadline, turn_deadline
-        if listening_wave_thread is not None:
-            listening_wave_stop.set()
-            listening_wave_thread.join(timeout=0.5)
-            listening_wave_thread = None
-        _reset_antennas_to_neutral()
-        followup_deadline = None
-        turn_deadline = time.monotonic() + MAX_TURN_S
-
-    try:
-        with client.realtime.connect(model=REALTIME_MODEL) as conn:
-            session: dict = {
-                "type": "realtime",
-                "model": REALTIME_MODEL,
-                "output_modalities": ["audio"],
-                "audio": {
-                    "input": {"turn_detection": {"type": "server_vad"}},
-                    "output": {"voice": REALTIME_VOICE},
-                },
-                "instructions": instructions,
-            }
-            if tools:
-                session["tools"] = tools
-                session["tool_choice"] = "auto"
-            conn.session.update(session=session)
-            logger.info(
-                "realtime session opened (model=%s, voice=%s, instructions=%d chars, tools=%d)",
-                REALTIME_MODEL, REALTIME_VOICE, len(instructions), len(tools),
-            )
-
-            producer = threading.Thread(
-                target=_pump_mic_to_realtime,
-                args=(reachy_mini, conn, stop_event, producer_done),
-                name="realtime-mic-producer",
-                daemon=True,
-            )
-            producer.start()
-
-            last_audio_at: float | None = None
-            for event in conn:
-                if stop_event.is_set():
-                    logger.info("stop_event set; ending realtime session")
-                    break
-                if time.monotonic() > session_deadline:
-                    logger.warning("realtime session exceeded %.0fs cap; ending", MAX_SESSION_S)
-                    break
-                if followup_deadline is not None and time.monotonic() > followup_deadline:
-                    logger.info("follow-up window elapsed with no speech; ending session")
-                    break
-                if followup_deadline is None and time.monotonic() > turn_deadline:
-                    logger.warning("model response exceeded %.0fs cap; ending", MAX_TURN_S)
-                    break
-
-                if event.type == "response.output_audio.delta":
-                    if wave_thread is None:
-                        wave_stop.clear()
-                        wave_thread = threading.Thread(
-                            target=_wave_antennas,
-                            args=(reachy_mini, wave_stop, motion_lock),
-                            name="realtime-antenna-wave",
-                            daemon=True,
-                        )
-                        wave_thread.start()
-                    pcm_bytes = base64.b64decode(event.delta)
-                    _push_realtime_audio(reachy_mini, pcm_bytes, output_rate)
-                    last_audio_at = time.monotonic()
-                elif event.type == "response.function_call_arguments.done":
-                    _handle_function_call(reachy_mini, conn, event, ctx)
-                    need_continuation = True
-                elif event.type == "response.done":
-                    if need_continuation:
-                        logger.info("response.done with pending tool result; continuing")
-                        need_continuation = False
-                        conn.response.create()
-                    else:
-                        logger.info("response.done received; entering listening window")
-                        _enter_listening()
-                elif event.type == "error":
-                    logger.error("realtime error event: %s", getattr(event, "error", event))
-                    break
-                elif event.type == "input_audio_buffer.speech_started":
-                    logger.info("user speech started")
-                    if followup_deadline is not None:
-                        _exit_listening()
-                elif event.type == "input_audio_buffer.speech_stopped":
-                    logger.info("user speech stopped")
-
-            producer_done.set()
-            producer.join(timeout=1.0)
-
-            if last_audio_at is not None:
-                tail_wait = max(0.0, 0.4 - (time.monotonic() - last_audio_at))
-                if tail_wait:
-                    time.sleep(tail_wait)
-    except Exception:
-        logger.exception("realtime turn failed")
-    finally:
-        producer_done.set()
-        wave_stop.set()
-        listening_wave_stop.set()
-        if wave_thread is not None:
-            wave_thread.join(timeout=0.5)
-        if listening_wave_thread is not None:
-            listening_wave_thread.join(timeout=0.5)
-        # Wait out any in-flight recorded move so we don't tug the antennas
-        # away from its targets mid-clip; cap the wait so we never hang.
-        if motion_lock.acquire(timeout=10.0):
-            try:
-                reachy_mini.goto_target(create_head_pose(), antennas=[0.0, 0.0], duration=0.2)
-            except Exception:
-                logger.exception("returning antennas to neutral failed")
-            finally:
-                motion_lock.release()
-        else:
-            logger.warning("could not acquire motion_lock to reset antennas; skipping")
 
 
 # --- Public: announce a message via a one-shot realtime session ----------
@@ -418,87 +223,23 @@ def announce_via_realtime(reachy_mini: ReachyMini, output_rate: int, message: st
     No mic input — the session is triggered with a fixed text input.
     Used by the timer service to speak when a timer fires. Will wait up to
     30s to grab the realtime lock if a wake-word turn is in flight.
-    Dispatches to OpenAI or Gemini based on `REACHY_CHAT_PROVIDER`.
+    Dispatches to OpenAI or Gemini based on `provider.name` in `config.toml`.
     """
     if not _realtime_session_lock.acquire(timeout=30.0):
         logger.warning("could not acquire realtime lock for announcement; skipping")
         return
     try:
-        provider = _get_provider()
-        if provider == PROVIDER_GEMINI:
-            from reachy_chat import gemini
-            gemini.run_gemini_announcement(reachy_mini, output_rate, message)
+        if REACHY_CHAT_PROVIDER == PROVIDER_GEMINI:
+            from reachy_chat import gemini_realtime
+            gemini_realtime.run_gemini_announcement(reachy_mini, output_rate, message)
         else:
-            _run_announcement(reachy_mini, output_rate, message)
+            from reachy_chat import openai_realtime
+            openai_realtime.run_openai_announcement(reachy_mini, output_rate, message)
     finally:
         _realtime_session_lock.release()
 
 
-def _get_provider() -> str:
-    return (os.environ.get(PROVIDER_ENV) or PROVIDER_OPENAI).strip().lower()
-
-
-def _run_announcement(reachy_mini: ReachyMini, output_rate: int, message: str) -> None:
-    client = OpenAI()
-    deadline = time.monotonic() + ANNOUNCE_MAX_S
-    try:
-        with client.realtime.connect(model=REALTIME_MODEL) as conn:
-            conn.session.update(session={
-                "type": "realtime",
-                "model": REALTIME_MODEL,
-                "output_modalities": ["audio"],
-                "audio": {"output": {"voice": REALTIME_VOICE}},
-                "instructions": f"Say exactly the following sentence and nothing else: {message}",
-            })
-            conn.response.create()
-            logger.info("announcement session opened: %r", message)
-
-            last_audio_at: float | None = None
-            for event in conn:
-                if time.monotonic() > deadline:
-                    logger.warning("announcement exceeded %.0fs cap; ending", ANNOUNCE_MAX_S)
-                    break
-                if event.type == "response.output_audio.delta":
-                    pcm_bytes = base64.b64decode(event.delta)
-                    _push_realtime_audio(reachy_mini, pcm_bytes, output_rate)
-                    last_audio_at = time.monotonic()
-                elif event.type == "response.done":
-                    break
-                elif event.type == "error":
-                    logger.error("announcement error: %s", getattr(event, "error", event))
-                    break
-
-            if last_audio_at is not None:
-                tail_wait = max(0.0, 0.4 - (time.monotonic() - last_audio_at))
-                if tail_wait:
-                    time.sleep(tail_wait)
-    except Exception:
-        logger.exception("announcement failed")
-
-
-# --- Internal: mic producer + antenna wave -------------------------------
-
-def _pump_mic_to_realtime(
-    reachy_mini: ReachyMini,
-    conn,
-    stop_event: threading.Event,
-    producer_done: threading.Event,
-) -> None:
-    """Read mic samples, resample 16 kHz -> 24 kHz, send as base64 PCM16."""
-    try:
-        while not producer_done.is_set() and not stop_event.is_set():
-            sample = reachy_mini.media.get_audio_sample()
-            if sample is None or len(sample) == 0:
-                time.sleep(0.005)
-                continue
-
-            mono16k = _to_mono_int16(sample)
-            pcm24k = _resample_int16(mono16k, SDK_INPUT_RATE, REALTIME_RATE)
-            payload = base64.b64encode(pcm24k.tobytes()).decode("utf-8")
-            conn.input_audio_buffer.append(audio=payload)
-    except Exception:
-        logger.exception("mic producer thread crashed")
-
+# --- Internal: antenna wave (shared by both provider backends) -----------
 
 def _wave_antennas(
     reachy_mini: ReachyMini,
@@ -556,12 +297,16 @@ def _wave_antennas_listening(
 
 
 def _push_realtime_audio(reachy_mini: ReachyMini, pcm_bytes: bytes, output_rate: int) -> None:
-    """Decode PCM16 mono @ 24 kHz, resample, apply volume, push to speaker."""
+    """Decode PCM16 mono @ provider rate, resample, apply volume, push to speaker.
+
+    Both OpenAI Realtime and Gemini Live deliver audio at `PROVIDER_AUDIO_RATE`,
+    so this is shared between the two backends.
+    """
     pcm = np.frombuffer(pcm_bytes, dtype=np.int16)
     floats = pcm.astype(np.float32) / 32767.0
-    if REALTIME_RATE != output_rate:
-        g = gcd(REALTIME_RATE, output_rate)
-        floats = resample_poly(floats, up=output_rate // g, down=REALTIME_RATE // g)
+    if PROVIDER_AUDIO_RATE != output_rate:
+        g = gcd(PROVIDER_AUDIO_RATE, output_rate)
+        floats = resample_poly(floats, up=output_rate // g, down=PROVIDER_AUDIO_RATE // g)
         floats = floats.astype(np.float32)
     reachy_mini.media.push_audio_sample(apply_output_volume(floats).reshape(-1, 1))
 
@@ -593,29 +338,6 @@ def _build_tools() -> list[dict]:
         if schema is not None:
             schemas.append(schema)
     return schemas
-
-
-def _handle_function_call(
-    reachy_mini: ReachyMini,
-    conn,
-    event,
-    ctx: dict[str, Any],
-) -> None:
-    """Dispatch one `response.function_call_arguments.done` event."""
-    call_id = getattr(event, "call_id", None)
-    name = getattr(event, "name", None)
-    raw_args = getattr(event, "arguments", "") or ""
-    output = _dispatch_tool_call(reachy_mini, name, raw_args, ctx)
-
-    if call_id:
-        try:
-            conn.conversation.item.create(item={
-                "type": "function_call_output",
-                "call_id": call_id,
-                "output": json.dumps(output),
-            })
-        except Exception:
-            logger.exception("sending function_call_output failed")
 
 
 def _dispatch_tool_call(
@@ -909,7 +631,7 @@ def _tool_web_search(reachy_mini: ReachyMini, args: dict, ctx: dict) -> dict:
     query = (args.get("query") or "").strip()
     if not query:
         return {"status": "error", "reason": "missing_query"}
-    client: OpenAI = ctx["client"]
+    client = ctx["client"]  # an `openai.OpenAI` instance (this tool only runs in the OpenAI backend).
     bounded = client.with_options(timeout=WEB_SEARCH_TIMEOUT_S)
     prompt = f"Search the web and answer concisely: {query}"
     # OpenAI has shipped both "web_search" and "web_search_preview" tool types.
@@ -1015,15 +737,6 @@ def _to_mono_int16(sample: np.ndarray) -> np.ndarray:
     if sample.ndim == 2:
         sample = sample.mean(axis=1)
     return (np.clip(sample, -1.0, 1.0) * 32767.0).astype(np.int16)
-
-
-def _resample_int16(samples: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
-    if src_rate == dst_rate:
-        return samples
-    g = gcd(src_rate, dst_rate)
-    floats = samples.astype(np.float32) / 32767.0
-    floats = resample_poly(floats, up=dst_rate // g, down=src_rate // g)
-    return np.clip(floats * 32767.0, -32768, 32767).astype(np.int16)
 
 
 # --- Backwards-compatible aliases (old import names used by main.py) ----

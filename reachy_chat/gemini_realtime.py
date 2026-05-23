@@ -1,12 +1,15 @@
 """Gemini Live API backend for realtime turns.
 
-Selected by setting `REACHY_CHAT_PROVIDER=gemini` in the daemon's environment.
-Auth via `GEMINI_API_KEY` (or `GOOGLE_API_KEY`). The Live API is async-only,
-so each turn spins up an asyncio loop in the calling (wake-word) thread —
-the public entry points (`run_gemini_turn`, `run_gemini_announcement`) stay
-synchronous so `realtime.py` can call them in place of the OpenAI versions.
+Sibling of [reachy_chat.openai_realtime][]; both are dispatched from
+[reachy_chat.realtime][] based on `provider.name` in `config.toml`.
+Selected by setting `provider.name = "gemini"`. Auth via `GEMINI_API_KEY`
+(or `GOOGLE_API_KEY`). The Live API is async-only, so each turn spins up
+an asyncio loop in the calling (wake-word) thread — the public entry
+points (`run_gemini_turn`, `run_gemini_announcement`) stay synchronous
+so `realtime.py` can call them with the same signature as their OpenAI
+counterparts.
 
-Mirrors the OpenAI implementation: same antenna wave, same motion lock, same
+Mirrors the OpenAI backend: same antenna wave, same motion lock, same
 tool registry from realtime.py, same audio output path. The model uses
 Gemini's built-in `google_search` grounding in place of the OpenAI-backed
 `web_search` function tool when in this provider mode — so a Gemini-only
@@ -25,12 +28,16 @@ from typing import Any
 from reachy_mini import ReachyMini
 from reachy_mini.utils import create_head_pose
 
-from reachy_chat.realtime import (
+from reachy_chat.config import (
     ANNOUNCE_MAX_S,
     FOLLOWUP_WINDOW_S,
+    GEMINI_MODEL,
+    GEMINI_VOICE,
     MAX_SESSION_S,
     MAX_TURN_S,
     RESET_TO_NEUTRAL_DURATION_S,
+)
+from reachy_chat.realtime import (
     _dispatch_tool_call,
     _push_realtime_audio,
     _to_mono_int16,
@@ -40,10 +47,8 @@ from reachy_chat.realtime import (
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-3.1-flash-live-preview"
 GEMINI_INPUT_RATE = 16_000   # Matches the SDK's mic rate; no resample needed.
 GEMINI_OUTPUT_RATE = 24_000  # PCM16 mono @ 24 kHz from the server.
-GEMINI_VOICE = "Aoede"       # Prebuilt voices: Puck, Charon, Kore, Fenrir, Aoede.
 
 # Tools whose backing dependency is OpenAI-specific. We swap in Gemini-native
 # equivalents (google_search) and drop the function declaration so the model
@@ -80,7 +85,7 @@ def _ensure_genai_available() -> bool:
     except ImportError:
         logger.error(
             "google-genai is not installed; install it into the apps venv "
-            "or set REACHY_CHAT_PROVIDER=openai"
+            "or set provider.name = \"openai\" in config.toml"
         )
         return False
     if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):

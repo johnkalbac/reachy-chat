@@ -16,7 +16,16 @@
       "Bash(/venvs/apps_venv/bin/python -c \"import reachy_mini; help\\(reachy_mini.ReachyMini.media\\)\")",
       "Bash(python -m py_compile reachy_chat/realtime.py reachy_chat/gemini.py)",
       "Bash(python -m py_compile reachy_chat/gemini.py)",
-      "Bash(python -m py_compile reachy_chat/realtime.py)"
+      "Bash(python -m py_compile reachy_chat/realtime.py)",
+      "Bash(python -m py_compile reachy_chat/config.py reachy_chat/main.py reachy_chat/realtime.py reachy_chat/gemini.py reachy_chat/timers.py reachy_chat/prefetch.py)",
+      "Bash(python -c \"import tomllib, pathlib; cfg=tomllib.loads\\(pathlib.Path\\('config.toml'\\).read_text\\(\\)\\); print\\(cfg\\)\")",
+      "Bash(python -m py_compile reachy_chat/config.py reachy_chat/realtime.py reachy_chat/gemini.py reachy_chat/main.py)",
+      "Bash(python -c \"import tomllib, pathlib; cfg=tomllib.loads\\(pathlib.Path\\('config.toml'\\).read_text\\(encoding='utf-8'\\)\\); print\\('openai:', cfg['openai']\\)\")",
+      "Bash(python -c \"from reachy_chat import config; print\\('WEB_SEARCH_MODEL =', config.WEB_SEARCH_MODEL\\); print\\('WEB_SEARCH_TIMEOUT_S =', config.WEB_SEARCH_TIMEOUT_S\\)\")",
+      "Bash(git -C \"c:/git/github/reachy-chat\" mv reachy_chat/gemini.py reachy_chat/gemini_realtime.py)",
+      "Bash(git -C \"c:/git/github/reachy-chat\" status --short)",
+      "Bash(python -m py_compile reachy_chat/realtime.py reachy_chat/openai_realtime.py reachy_chat/gemini_realtime.py reachy_chat/main.py reachy_chat/timers.py reachy_chat/prefetch.py reachy_chat/config.py)",
+      "Bash(echo \"Exit: $?\")"
     ]
   }
 }

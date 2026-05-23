@@ -28,6 +28,7 @@ from reachy_mini import ReachyMini, ReachyMiniApp
 from reachy_mini.utils import create_head_pose
 
 from reachy_chat import timers
+from reachy_chat.config import WAKE_WORD, WAKE_WORD_THRESHOLD
 from reachy_chat.realtime import (
     apply_output_volume,
     play_ready_chime,
@@ -37,8 +38,6 @@ from reachy_chat.realtime import (
 
 logger = logging.getLogger(__name__)
 
-WAKE_WORD = "hey_jarvis"
-WAKE_WORD_THRESHOLD = 0.5
 SDK_SAMPLE_RATE = 16_000
 FRAME_MS = 80
 FRAME_SAMPLES = SDK_SAMPLE_RATE * FRAME_MS // 1000  # 1280

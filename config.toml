@@ -1,0 +1,49 @@
+# reachy-chat runtime configuration.
+#
+# Changes take effect on the next app restart.
+
+# --- Wake-word detection -------------------------------------------------
+# Which openWakeWord model to listen for, and how confident the model has
+# to be before we treat a frame as a wake-word hit.
+[wake_word]
+name = "hey_jarvis"
+# Score cutoff in [0, 1]. Raise if you get false triggers, lower if it misses.
+threshold = 0.5
+
+# --- Realtime provider ---------------------------------------------------
+# Which backend handles the conversational turn.
+[provider]
+# "openai" -> OpenAI Realtime API (needs OPENAI_API_KEY)
+# "gemini" -> Gemini Live API (needs GEMINI_API_KEY)
+name = "openai"
+
+# --- OpenAI Realtime backend --------------------------------------------
+[openai]
+# Realtime model id served by OpenAI.
+model = "gpt-realtime"
+voice = "ballad"
+# Model used by the `web_search` tool's Responses-API call (OpenAI provider only).
+web_search_model = "gpt-4o-mini"
+# Max seconds to wait for a web_search response before erroring back to the model.
+web_search_timeout_s = 15.0
+
+# --- Gemini Live backend -------------------------------------------------
+[gemini]
+# Gemini Live model id.
+model = "gemini-3.1-flash-live-preview"
+# Prebuilt voice — also "Puck", "Charon", "Kore", "Fenrir", "Aoede", "Iapetus".
+voice = "Iapetus"
+
+# --- Session timing (seconds) -------------------------------------------
+# Limits and pacing that apply to both providers.
+[timing]
+# Cap on a single timer-fired announcement realtime session.
+announce_max_s = 15.0
+# Silence allowed after a model reply before the multi-turn session closes.
+followup_window_s = 8.0
+# Whole multi-turn session cap, summed across every turn.
+max_session_s = 180.0
+# Per-response cap; the model's reply alone can't exceed this.
+max_turn_s = 60.0
+# Smooth antenna sweep back to neutral between speaking and listening.
+reset_to_neutral_duration_s = 0.6
