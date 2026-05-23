@@ -185,14 +185,20 @@ async def _run_gemini_turn_async(
             # Drain messages off `session.receive()` into a queue so the main
             # loop can poll with a short timeout for deadline checks WITHOUT
             # cancelling the receive iterator (which would break the underlying
-            # websocket read mid-frame).
+            # websocket read mid-frame). Each call to `session.receive()` yields
+            # one turn's worth of messages and then ends — for multi-turn we
+            # re-enter the iterator until the session itself closes or we
+            # cancel the drain task.
             message_queue: asyncio.Queue = asyncio.Queue()
             drain_sentinel = object()
 
             async def _drain_messages() -> None:
                 try:
-                    async for msg in session.receive():
-                        await message_queue.put(msg)
+                    while True:
+                        async for msg in session.receive():
+                            await message_queue.put(msg)
+                        # Receive generator ended (turn complete). Loop back to
+                        # await the next turn's stream on the same session.
                 except asyncio.CancelledError:
                     raise
                 except Exception:
