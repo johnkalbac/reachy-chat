@@ -506,11 +506,13 @@ def _wave_antennas(
     motion_lock: threading.Lock,
     amplitude_deg: float = WAVE_AMPLITUDE_DEG,
     freq_hz: float = WAVE_FREQ_HZ,
+    antisymmetric: bool = True,
 ) -> None:
-    """Antisymmetric sine wave on the antennas.
+    """Sine wave on the antennas.
 
-    Default params are the "speaking" wave. Pass smaller/slower values to
-    distinguish other phases (e.g. waiting for a follow-up utterance).
+    Default params are the "speaking" wave: antisymmetric (one antenna up
+    while the other is down) at 15° / 0.8 Hz. Pass `antisymmetric=False`
+    to make both antennas move together for a simpler back-and-forth wave.
     """
     neutral = create_head_pose()
     amplitude = np.deg2rad(amplitude_deg)
@@ -519,6 +521,7 @@ def _wave_antennas(
     try:
         while not stop_flag.is_set():
             offset = float(amplitude * np.sin(omega * (time.monotonic() - t0)))
+            pair = [offset, -offset] if antisymmetric else [offset, offset]
             with motion_lock:
                 # Re-check inside the lock: while we were waiting for it (e.g.
                 # a recorded move was running), the turn may have ended.
@@ -526,7 +529,7 @@ def _wave_antennas(
                 # position right after the end-of-turn goto_target.
                 if stop_flag.is_set():
                     break
-                reachy_mini.set_target(head=neutral, antennas=[offset, -offset])
+                reachy_mini.set_target(head=neutral, antennas=pair)
             time.sleep(WAVE_TICK_S)
     except Exception:
         logger.exception("antenna wave thread crashed")
@@ -537,13 +540,18 @@ def _wave_antennas_listening(
     stop_flag: threading.Event,
     motion_lock: threading.Lock,
 ) -> None:
-    """Slow, gentle waggle while waiting for the user's follow-up utterance."""
+    """Slow, gentle back-and-forth wave while waiting for the follow-up.
+
+    Symmetric (both antennas move together in phase) so it reads as a calm
+    listening cue rather than the busier antisymmetric speaking wave.
+    """
     _wave_antennas(
         reachy_mini,
         stop_flag,
         motion_lock,
         amplitude_deg=LISTENING_WAVE_AMPLITUDE_DEG,
         freq_hz=LISTENING_WAVE_FREQ_HZ,
+        antisymmetric=False,
     )
 
 

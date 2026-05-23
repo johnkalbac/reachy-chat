@@ -251,22 +251,6 @@ async def _run_gemini_turn_async(
                     getattr(tool_call, "function_calls", None) or []
                 )
 
-                # Log transcriptions when enabled — invaluable for debugging
-                # multi-turn context preservation.
-                server_content_dbg = getattr(message, "server_content", None)
-                if server_content_dbg is not None:
-                    in_t = getattr(server_content_dbg, "input_transcription", None)
-                    if in_t is not None and getattr(in_t, "text", None):
-                        logger.info("user said: %r", in_t.text)
-                    out_t = getattr(server_content_dbg, "output_transcription", None)
-                    if out_t is not None and getattr(out_t, "text", None):
-                        logger.info("model said: %r", out_t.text)
-                resumption = getattr(message, "session_resumption_update", None)
-                if resumption is not None:
-                    handle = getattr(resumption, "new_handle", None)
-                    resumable = getattr(resumption, "resumable", None)
-                    logger.info("session_resumption update: resumable=%s handle=%r", resumable, handle)
-
                 # Gemini doesn't emit a "user speech started" event. The first
                 # message after we entered the listening window is our cue:
                 # the model is responding, so the user must have spoken.
@@ -488,15 +472,12 @@ def _build_gemini_config(instructions: str, oai_tools: list[dict]) -> dict:
         "speech_config": {
             "voice_config": {"prebuilt_voice_config": {"voice_name": GEMINI_VOICE}},
         },
-        # Enable session_resumption to (hopefully) keep conversation context
-        # alive across multiple receive() generators within one connection.
-        # Empty config = enabled, no prior handle.
+        # Required for multi-turn: without session_resumption, each new
+        # session.receive() generator within one connection arrives at the
+        # server without prior conversation context (system prompt and turn
+        # history both dropped). Empty config enables it; we don't need to
+        # capture or reuse the handle since we're not actually reconnecting.
         "session_resumption": {},
-        # Transcriptions surface what the model thought it heard / said as
-        # text in the receive stream — invaluable for debugging multi-turn
-        # context issues.
-        "input_audio_transcription": {},
-        "output_audio_transcription": {},
     }
     if tools:
         config["tools"] = tools
