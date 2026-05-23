@@ -167,6 +167,7 @@ async def _run_gemini_turn_async(
         turn_deadline = time.monotonic() + MAX_TURN_S
 
     producer: asyncio.Task | None = None
+    drain_task: asyncio.Task | None = None
     try:
         async with client.aio.live.connect(model=GEMINI_MODEL, config=config) as session:
             logger.info(
@@ -181,10 +182,26 @@ async def _run_gemini_turn_async(
                 name="gemini-mic-producer",
             )
 
-            # Manual iteration with a periodic timeout so the deadline checks
-            # below fire even during the silent follow-up window when no
-            # messages arrive.
-            messages = session.receive().__aiter__()
+            # Drain messages off `session.receive()` into a queue so the main
+            # loop can poll with a short timeout for deadline checks WITHOUT
+            # cancelling the receive iterator (which would break the underlying
+            # websocket read mid-frame).
+            message_queue: asyncio.Queue = asyncio.Queue()
+            drain_sentinel = object()
+
+            async def _drain_messages() -> None:
+                try:
+                    async for msg in session.receive():
+                        await message_queue.put(msg)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("gemini receive drain crashed")
+                finally:
+                    await message_queue.put(drain_sentinel)
+
+            drain_task = asyncio.create_task(_drain_messages(), name="gemini-receive-drain")
+
             last_audio_at: float | None = None
             while True:
                 if stop_event.is_set():
@@ -201,10 +218,11 @@ async def _run_gemini_turn_async(
                     break
 
                 try:
-                    message = await asyncio.wait_for(messages.__anext__(), timeout=0.5)
+                    message = await asyncio.wait_for(message_queue.get(), timeout=0.5)
                 except asyncio.TimeoutError:
                     continue
-                except StopAsyncIteration:
+                if message is drain_sentinel:
+                    logger.info("gemini receive stream closed; ending session")
                     break
 
                 audio_bytes = _extract_audio_bytes(message)
@@ -255,6 +273,12 @@ async def _run_gemini_turn_async(
             producer.cancel()
             try:
                 await producer
+            except (asyncio.CancelledError, Exception):
+                pass
+        if drain_task is not None:
+            drain_task.cancel()
+            try:
+                await drain_task
             except (asyncio.CancelledError, Exception):
                 pass
         wave_stop.set()

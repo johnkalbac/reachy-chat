@@ -1,15 +1,3 @@
----
-title: reachy-chat
-emoji: 💬
-colorFrom: blue
-colorTo: indigo
-sdk: docker
-pinned: false
-tags:
-  - reachy_mini
-  - reachy_mini_python_app
----
-
 # reachy-chat
 
 An AI-enabled chat assistant for the Reachy Mini Wireless. Wake on a
