@@ -15,7 +15,7 @@ threshold = 0.5
 [provider]
 # "openai" -> OpenAI Realtime API (needs OPENAI_API_KEY)
 # "gemini" -> Gemini Live API (needs GEMINI_API_KEY)
-name = "openai"
+name = "gemini"
 
 # --- OpenAI Realtime backend --------------------------------------------
 [openai]
