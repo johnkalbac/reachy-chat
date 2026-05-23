@@ -27,11 +27,15 @@ from reachy_mini.utils import create_head_pose
 
 from reachy_chat.realtime import (
     ANNOUNCE_MAX_S,
+    FOLLOWUP_WINDOW_S,
+    MAX_SESSION_S,
     MAX_TURN_S,
+    RESET_TO_NEUTRAL_DURATION_S,
     _dispatch_tool_call,
     _push_realtime_audio,
     _to_mono_int16,
     _wave_antennas,
+    _wave_antennas_listening,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,16 +106,65 @@ async def _run_gemini_turn_async(
     client = genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
     config = _build_gemini_config(instructions, oai_tools)
 
-    deadline = time.monotonic() + MAX_TURN_S
-    wave_stop = threading.Event()
+    session_deadline = time.monotonic() + MAX_SESSION_S
+    turn_deadline = time.monotonic() + MAX_TURN_S
+    followup_deadline: float | None = None
+
     motion_lock = threading.Lock()
+    wave_stop = threading.Event()
     wave_thread: threading.Thread | None = None
+    listening_wave_stop = threading.Event()
+    listening_wave_thread: threading.Thread | None = None
 
     ctx: dict[str, Any] = {
         "client": client,
         "motion_lock": motion_lock,
         "output_rate": output_rate,
     }
+
+    def _reset_antennas_to_neutral() -> None:
+        if not motion_lock.acquire(timeout=2.0):
+            logger.warning("could not acquire motion_lock for neutral reset; skipping")
+            return
+        try:
+            reachy_mini.goto_target(
+                create_head_pose(),
+                antennas=[0.0, 0.0],
+                duration=RESET_TO_NEUTRAL_DURATION_S,
+            )
+        except Exception:
+            logger.exception("returning antennas to neutral failed")
+        finally:
+            motion_lock.release()
+
+    def _enter_listening() -> None:
+        nonlocal wave_thread, listening_wave_thread, followup_deadline
+        if wave_thread is not None:
+            wave_stop.set()
+            wave_thread.join(timeout=0.5)
+            wave_thread = None
+            wave_stop.clear()
+        _reset_antennas_to_neutral()
+        listening_wave_stop.clear()
+        listening_wave_thread = threading.Thread(
+            target=_wave_antennas_listening,
+            args=(reachy_mini, listening_wave_stop, motion_lock),
+            name="gemini-listening-wave",
+            daemon=True,
+        )
+        listening_wave_thread.start()
+        followup_deadline = time.monotonic() + FOLLOWUP_WINDOW_S
+        logger.info("entering follow-up listening window (%.0fs)", FOLLOWUP_WINDOW_S)
+
+    def _exit_listening() -> None:
+        nonlocal listening_wave_thread, followup_deadline, turn_deadline
+        if listening_wave_thread is not None:
+            listening_wave_stop.set()
+            listening_wave_thread.join(timeout=0.5)
+            listening_wave_thread = None
+        _reset_antennas_to_neutral()
+        followup_deadline = None
+        turn_deadline = time.monotonic() + MAX_TURN_S
 
     producer: asyncio.Task | None = None
     try:
@@ -128,18 +181,47 @@ async def _run_gemini_turn_async(
                 name="gemini-mic-producer",
             )
 
+            # Manual iteration with a periodic timeout so the deadline checks
+            # below fire even during the silent follow-up window when no
+            # messages arrive.
+            messages = session.receive().__aiter__()
             last_audio_at: float | None = None
-            async for message in session.receive():
+            while True:
                 if stop_event.is_set():
-                    logger.info("stop_event set; ending gemini turn")
+                    logger.info("stop_event set; ending gemini session")
                     break
-                if time.monotonic() > deadline:
-                    logger.warning("gemini turn exceeded %.0fs cap; ending", MAX_TURN_S)
+                if time.monotonic() > session_deadline:
+                    logger.warning("gemini session exceeded %.0fs cap; ending", MAX_SESSION_S)
+                    break
+                if followup_deadline is not None and time.monotonic() > followup_deadline:
+                    logger.info("follow-up window elapsed with no speech; ending session")
+                    break
+                if followup_deadline is None and time.monotonic() > turn_deadline:
+                    logger.warning("gemini response exceeded %.0fs cap; ending", MAX_TURN_S)
+                    break
+
+                try:
+                    message = await asyncio.wait_for(messages.__anext__(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
+                except StopAsyncIteration:
                     break
 
                 audio_bytes = _extract_audio_bytes(message)
+                tool_call = getattr(message, "tool_call", None)
+                has_function_calls = tool_call is not None and (
+                    getattr(tool_call, "function_calls", None) or []
+                )
+
+                # Gemini doesn't emit a "user speech started" event. The first
+                # message after we entered the listening window is our cue:
+                # the model is responding, so the user must have spoken.
+                if followup_deadline is not None and (audio_bytes or has_function_calls):
+                    _exit_listening()
+
                 if audio_bytes:
                     if wave_thread is None:
+                        wave_stop.clear()
                         wave_thread = threading.Thread(
                             target=_wave_antennas,
                             args=(reachy_mini, wave_stop, motion_lock),
@@ -150,16 +232,15 @@ async def _run_gemini_turn_async(
                     _push_realtime_audio(reachy_mini, audio_bytes, output_rate)
                     last_audio_at = time.monotonic()
 
-                tool_call = getattr(message, "tool_call", None)
-                if tool_call is not None:
-                    fcs = getattr(tool_call, "function_calls", None) or []
-                    if fcs:
-                        await _send_gemini_tool_responses(reachy_mini, session, fcs, ctx)
+                if has_function_calls:
+                    await _send_gemini_tool_responses(
+                        reachy_mini, session, tool_call.function_calls, ctx,
+                    )
 
                 server_content = getattr(message, "server_content", None)
                 if server_content is not None and getattr(server_content, "turn_complete", False):
-                    logger.info("gemini turn_complete received")
-                    break
+                    logger.info("gemini turn_complete; entering listening window")
+                    _enter_listening()
 
             producer_done.set()
 
@@ -177,17 +258,20 @@ async def _run_gemini_turn_async(
             except (asyncio.CancelledError, Exception):
                 pass
         wave_stop.set()
+        listening_wave_stop.set()
         if wave_thread is not None:
             wave_thread.join(timeout=0.5)
-            if motion_lock.acquire(timeout=10.0):
-                try:
-                    reachy_mini.goto_target(create_head_pose(), antennas=[0.0, 0.0], duration=0.2)
-                except Exception:
-                    logger.exception("returning antennas to neutral failed")
-                finally:
-                    motion_lock.release()
-            else:
-                logger.warning("could not acquire motion_lock to reset antennas; skipping")
+        if listening_wave_thread is not None:
+            listening_wave_thread.join(timeout=0.5)
+        if motion_lock.acquire(timeout=10.0):
+            try:
+                reachy_mini.goto_target(create_head_pose(), antennas=[0.0, 0.0], duration=0.2)
+            except Exception:
+                logger.exception("returning antennas to neutral failed")
+            finally:
+                motion_lock.release()
+        else:
+            logger.warning("could not acquire motion_lock to reset antennas; skipping")
 
 
 async def _pump_mic_to_gemini(

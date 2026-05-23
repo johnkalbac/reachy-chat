@@ -43,12 +43,17 @@ PROVIDER_GEMINI = "gemini"
 REALTIME_MODEL = "gpt-realtime"
 REALTIME_RATE = 24_000  # OpenAI Realtime default: PCM16 mono @ 24 kHz, both directions.
 REALTIME_VOICE = "ballad"
-MAX_TURN_S = 30.0  # hard cap; an unresponsive session shouldn't pin the device.
+MAX_TURN_S = 60.0  # per-response cap; the model's reply alone can't exceed this.
+MAX_SESSION_S = 180.0  # whole multi-turn session cap, summed across all turns.
+FOLLOWUP_WINDOW_S = 8.0  # silence allowed after a model reply before the session closes.
+RESET_TO_NEUTRAL_DURATION_S = 0.6  # smooth antenna sweep back to neutral between turns.
 SDK_INPUT_RATE = 16_000  # mic is 16 kHz.
 
 WAVE_AMPLITUDE_DEG = 15.0  # peak antenna deflection while assistant is speaking.
 WAVE_FREQ_HZ = 0.8         # full cycles per second.
 WAVE_TICK_S = 0.04         # 25 Hz update rate for set_target — gentle on the motor bus.
+LISTENING_WAVE_AMPLITUDE_DEG = 8.0  # smaller deflection while waiting for a follow-up.
+LISTENING_WAVE_FREQ_HZ = 0.3        # slower than the speaking wave so they read as distinct.
 
 WAGGLE_AMPLITUDE_DEG = 30.0  # wider than the speaking wave so it reads as an alert.
 WAGGLE_FREQ_HZ = 3.0
@@ -220,12 +225,27 @@ def realtime_turn(reachy_mini: ReachyMini, stop_event: threading.Event, output_r
 
 
 def _run_realtime_turn(reachy_mini: ReachyMini, stop_event: threading.Event, output_rate: int) -> None:
+    """Open one multi-turn realtime session.
+
+    A session contains one or more model responses. After each response the
+    robot enters a `FOLLOWUP_WINDOW_S` listening window with a slow antenna
+    waggle; if the user starts speaking, that becomes the next turn. The
+    session ends when the window elapses with no speech, the server errors,
+    `stop_event` is set, or `MAX_SESSION_S` is reached.
+    """
     client = OpenAI()
-    deadline = time.monotonic() + MAX_TURN_S
+    session_deadline = time.monotonic() + MAX_SESSION_S
+    turn_deadline = time.monotonic() + MAX_TURN_S
+    followup_deadline: float | None = None  # set while in the listening window.
+
     producer_done = threading.Event()
+    motion_lock = threading.Lock()
+
     wave_stop = threading.Event()
     wave_thread: threading.Thread | None = None
-    motion_lock = threading.Lock()
+    listening_wave_stop = threading.Event()
+    listening_wave_thread: threading.Thread | None = None
+
     instructions = _load_instructions()
     tools = _build_tools()
     need_continuation = False
@@ -235,6 +255,52 @@ def _run_realtime_turn(reachy_mini: ReachyMini, stop_event: threading.Event, out
         "motion_lock": motion_lock,
         "output_rate": output_rate,
     }
+
+    def _reset_antennas_to_neutral() -> None:
+        # Short timeout: a recorded move can hold the lock for many seconds,
+        # in which case we'd rather skip the cosmetic reset than block.
+        if not motion_lock.acquire(timeout=2.0):
+            logger.warning("could not acquire motion_lock for neutral reset; skipping")
+            return
+        try:
+            reachy_mini.goto_target(
+                create_head_pose(),
+                antennas=[0.0, 0.0],
+                duration=RESET_TO_NEUTRAL_DURATION_S,
+            )
+        except Exception:
+            logger.exception("returning antennas to neutral failed")
+        finally:
+            motion_lock.release()
+
+    def _enter_listening() -> None:
+        nonlocal wave_thread, listening_wave_thread, followup_deadline
+        if wave_thread is not None:
+            wave_stop.set()
+            wave_thread.join(timeout=0.5)
+            wave_thread = None
+            wave_stop.clear()
+        _reset_antennas_to_neutral()
+        listening_wave_stop.clear()
+        listening_wave_thread = threading.Thread(
+            target=_wave_antennas_listening,
+            args=(reachy_mini, listening_wave_stop, motion_lock),
+            name="realtime-listening-wave",
+            daemon=True,
+        )
+        listening_wave_thread.start()
+        followup_deadline = time.monotonic() + FOLLOWUP_WINDOW_S
+        logger.info("entering follow-up listening window (%.0fs)", FOLLOWUP_WINDOW_S)
+
+    def _exit_listening() -> None:
+        nonlocal listening_wave_thread, followup_deadline, turn_deadline
+        if listening_wave_thread is not None:
+            listening_wave_stop.set()
+            listening_wave_thread.join(timeout=0.5)
+            listening_wave_thread = None
+        _reset_antennas_to_neutral()
+        followup_deadline = None
+        turn_deadline = time.monotonic() + MAX_TURN_S
 
     try:
         with client.realtime.connect(model=REALTIME_MODEL) as conn:
@@ -268,14 +334,21 @@ def _run_realtime_turn(reachy_mini: ReachyMini, stop_event: threading.Event, out
             last_audio_at: float | None = None
             for event in conn:
                 if stop_event.is_set():
-                    logger.info("stop_event set; ending realtime turn")
+                    logger.info("stop_event set; ending realtime session")
                     break
-                if time.monotonic() > deadline:
-                    logger.warning("realtime turn exceeded %.0fs cap; ending", MAX_TURN_S)
+                if time.monotonic() > session_deadline:
+                    logger.warning("realtime session exceeded %.0fs cap; ending", MAX_SESSION_S)
+                    break
+                if followup_deadline is not None and time.monotonic() > followup_deadline:
+                    logger.info("follow-up window elapsed with no speech; ending session")
+                    break
+                if followup_deadline is None and time.monotonic() > turn_deadline:
+                    logger.warning("model response exceeded %.0fs cap; ending", MAX_TURN_S)
                     break
 
                 if event.type == "response.output_audio.delta":
                     if wave_thread is None:
+                        wave_stop.clear()
                         wave_thread = threading.Thread(
                             target=_wave_antennas,
                             args=(reachy_mini, wave_stop, motion_lock),
@@ -295,13 +368,15 @@ def _run_realtime_turn(reachy_mini: ReachyMini, stop_event: threading.Event, out
                         need_continuation = False
                         conn.response.create()
                     else:
-                        logger.info("response.done received")
-                        break
+                        logger.info("response.done received; entering listening window")
+                        _enter_listening()
                 elif event.type == "error":
                     logger.error("realtime error event: %s", getattr(event, "error", event))
                     break
                 elif event.type == "input_audio_buffer.speech_started":
                     logger.info("user speech started")
+                    if followup_deadline is not None:
+                        _exit_listening()
                 elif event.type == "input_audio_buffer.speech_stopped":
                     logger.info("user speech stopped")
 
@@ -317,19 +392,22 @@ def _run_realtime_turn(reachy_mini: ReachyMini, stop_event: threading.Event, out
     finally:
         producer_done.set()
         wave_stop.set()
+        listening_wave_stop.set()
         if wave_thread is not None:
             wave_thread.join(timeout=0.5)
-            # Wait out any in-flight recorded move so we don't tug the antennas
-            # away from its targets mid-clip; cap the wait so we never hang.
-            if motion_lock.acquire(timeout=10.0):
-                try:
-                    reachy_mini.goto_target(create_head_pose(), antennas=[0.0, 0.0], duration=0.2)
-                except Exception:
-                    logger.exception("returning antennas to neutral failed")
-                finally:
-                    motion_lock.release()
-            else:
-                logger.warning("could not acquire motion_lock to reset antennas; skipping")
+        if listening_wave_thread is not None:
+            listening_wave_thread.join(timeout=0.5)
+        # Wait out any in-flight recorded move so we don't tug the antennas
+        # away from its targets mid-clip; cap the wait so we never hang.
+        if motion_lock.acquire(timeout=10.0):
+            try:
+                reachy_mini.goto_target(create_head_pose(), antennas=[0.0, 0.0], duration=0.2)
+            except Exception:
+                logger.exception("returning antennas to neutral failed")
+            finally:
+                motion_lock.release()
+        else:
+            logger.warning("could not acquire motion_lock to reset antennas; skipping")
 
 
 # --- Public: announce a message via a one-shot realtime session ----------
@@ -426,11 +504,17 @@ def _wave_antennas(
     reachy_mini: ReachyMini,
     stop_flag: threading.Event,
     motion_lock: threading.Lock,
+    amplitude_deg: float = WAVE_AMPLITUDE_DEG,
+    freq_hz: float = WAVE_FREQ_HZ,
 ) -> None:
-    """Antisymmetric sine wave on the antennas while the assistant is speaking."""
+    """Antisymmetric sine wave on the antennas.
+
+    Default params are the "speaking" wave. Pass smaller/slower values to
+    distinguish other phases (e.g. waiting for a follow-up utterance).
+    """
     neutral = create_head_pose()
-    amplitude = np.deg2rad(WAVE_AMPLITUDE_DEG)
-    omega = 2 * np.pi * WAVE_FREQ_HZ
+    amplitude = np.deg2rad(amplitude_deg)
+    omega = 2 * np.pi * freq_hz
     t0 = time.monotonic()
     try:
         while not stop_flag.is_set():
@@ -446,6 +530,21 @@ def _wave_antennas(
             time.sleep(WAVE_TICK_S)
     except Exception:
         logger.exception("antenna wave thread crashed")
+
+
+def _wave_antennas_listening(
+    reachy_mini: ReachyMini,
+    stop_flag: threading.Event,
+    motion_lock: threading.Lock,
+) -> None:
+    """Slow, gentle waggle while waiting for the user's follow-up utterance."""
+    _wave_antennas(
+        reachy_mini,
+        stop_flag,
+        motion_lock,
+        amplitude_deg=LISTENING_WAVE_AMPLITUDE_DEG,
+        freq_hz=LISTENING_WAVE_FREQ_HZ,
+    )
 
 
 def _push_realtime_audio(reachy_mini: ReachyMini, pcm_bytes: bytes, output_rate: int) -> None:
@@ -561,7 +660,8 @@ def _emotion_schema() -> dict | None:
         "description": (
             "Play a short physical animation on the robot's body and antennas to react "
             "expressively. Use sparingly — only when an emotion would visibly add to "
-            "what you're saying. The clip plays asynchronously while you keep speaking."
+            "what you're saying. The clip plays asynchronously. Do not narrate or "
+            "announce this action; just call the tool."
         ),
         "parameters": {
             "type": "object",
@@ -605,7 +705,8 @@ def _dance_schema() -> dict | None:
         "description": (
             "Play a longer choreographed dance routine on the robot's body. Heavier "
             "than play_emotion — only call when the user explicitly asks the robot to "
-            "dance, or when celebration is clearly warranted. Plays asynchronously."
+            "dance, or when celebration is clearly warranted. Plays asynchronously. "
+            "Do not narrate or announce this action; just call the tool."
         ),
         "parameters": {
             "type": "object",
@@ -683,7 +784,8 @@ def _set_volume_schema() -> dict:
         "description": (
             "Set the robot's audio output level as a percentage. Affects your own "
             "voice, the ready chime, and timer announcements. Does not unmute — call "
-            "unmute separately if the robot is muted."
+            "unmute separately if the robot is muted. Do not narrate the change; the "
+            "user will hear the new level on your next words."
         ),
         "parameters": {
             "type": "object",
@@ -707,7 +809,10 @@ def _mute_schema() -> dict:
     return {
         "type": "function",
         "name": "mute",
-        "description": "Silence all audio output (your voice, chimes, announcements) until unmute is called.",
+        "description": (
+            "Silence all audio output (your voice, chimes, announcements) until "
+            "unmute is called. Do not narrate the action; the silence speaks for itself."
+        ),
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
     }
 
@@ -720,7 +825,7 @@ def _unmute_schema() -> dict:
     return {
         "type": "function",
         "name": "unmute",
-        "description": "Restore audio output after a previous mute.",
+        "description": "Restore audio output after a previous mute. Do not narrate the action.",
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
     }
 
@@ -829,8 +934,9 @@ def _set_timer_schema() -> dict:
         "name": "set_timer",
         "description": (
             "Set a countdown timer that announces itself when it fires. The user "
-            "will hear a chime and a brief spoken announcement using the label. "
-            "Returns the timer id and the seconds remaining."
+            "will hear a chime and a brief spoken announcement using the label. Do "
+            "not narrate the setup; just call the tool. Returns the timer id and "
+            "the seconds remaining."
         ),
         "parameters": {
             "type": "object",
