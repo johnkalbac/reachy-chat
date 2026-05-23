@@ -1,0 +1,125 @@
+<mxfile host="65bd71144e">
+    <diagram name="Voice Pipeline" id="voice-pipeline">
+        <mxGraphModel dx="754" dy="591" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="1400" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="2" value="" style="whiteSpace=wrap;html=1;" vertex="1" parent="1">
+                    <mxGeometry x="40" y="10" width="1080" height="1320" as="geometry"/>
+                </mxCell>
+                <mxCell id="title" value="Reachy Chat — Voice Processing Pipeline" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="200" y="20" width="700" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="mic" value="Microphone&#xa;(Reachy Mini SDK)&#xa;16 kHz · float32 · stereo" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="430" y="90" width="240" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="wakeloop" value="Wake-Word Loop&#xa;(reachy_chat/main.py)" style="swimlane;fontSize=14;fontStyle=1;startSize=30;fillColor=#f5f5f5;strokeColor=#666666;swimlaneFillColor=#ffffff;horizontal=1" parent="1" vertex="1">
+                    <mxGeometry x="280" y="200" width="540" height="280" as="geometry"/>
+                </mxCell>
+                <mxCell id="convert" value="Convert to mono int16&#xa;Accumulate into 80 ms / 1280-sample frames" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontSize=12" parent="wakeloop" vertex="1">
+                    <mxGeometry x="30" y="50" width="480" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="oww" value="openWakeWord (ONNX backend)&#xa;model.predict(frame)  ·  WAKE_WORD = &quot;hey_jarvis&quot;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontSize=12" parent="wakeloop" vertex="1">
+                    <mxGeometry x="30" y="115" width="480" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="thresh" value="score ≥ 0.5 ?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;fontStyle=1" parent="wakeloop" vertex="1">
+                    <mxGeometry x="190" y="185" width="160" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="loopback" value="no → next frame" style="text;html=1;align=center;verticalAlign=middle;fontSize=11;fontStyle=2;fontColor=#666666" parent="wakeloop" vertex="1">
+                    <mxGeometry x="360" y="200" width="150" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333" parent="wakeloop" source="convert" target="oww" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333" parent="wakeloop" source="oww" target="thresh" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="nod" value="Nod head (async)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11" parent="1" vertex="1">
+                    <mxGeometry x="60" y="395" width="160" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="turn" value="realtime_turn()&#xa;(reachy_chat/realtime.py)&#xa;Acquires _realtime_session_lock&#xa;Loads prompts/*.md + tool schemas" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="380" y="520" width="340" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="provider" value="REACHY_CHAT_PROVIDER ?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="420" y="665" width="260" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="openai" value="OpenAI Realtime API&#xa;(reachy_chat/realtime.py)" style="swimlane;fontSize=13;fontStyle=1;startSize=40;fillColor=#fff4e6;strokeColor=#d79b00;swimlaneFillColor=#fffaf0;horizontal=1" parent="1" vertex="1">
+                    <mxGeometry x="80" y="780" width="430" height="250" as="geometry"/>
+                </mxCell>
+                <mxCell id="oa1" value="WebSocket: client.realtime.connect(model=&quot;gpt-realtime&quot;)&#xa;session.update — server VAD, voice, instructions, tools" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11" parent="openai" vertex="1">
+                    <mxGeometry x="15" y="50" width="400" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="oa2" value="Mic producer: 16 kHz → 24 kHz (resample_poly)&#xa;base64 PCM16 → input_audio_buffer.append" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11" parent="openai" vertex="1">
+                    <mxGeometry x="15" y="110" width="400" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="oa3" value="Event loop: response.output_audio.delta&#xa;Tool calls + continuation after function_call_output" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11" parent="openai" vertex="1">
+                    <mxGeometry x="15" y="170" width="400" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="gemini" value="Gemini Live API&#xa;(reachy_chat/gemini.py)" style="swimlane;fontSize=13;fontStyle=1;startSize=40;fillColor=#e8f5e9;strokeColor=#4285f4;swimlaneFillColor=#f5fbf5;horizontal=1" parent="1" vertex="1">
+                    <mxGeometry x="590" y="780" width="430" height="250" as="geometry"/>
+                </mxCell>
+                <mxCell id="gm1" value="asyncio Live session: gemini-3.1-flash-live-preview&#xa;System instruction + tool declarations (no web_search)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#4285f4;fontSize=11" parent="gemini" vertex="1">
+                    <mxGeometry x="15" y="50" width="400" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="gm2" value="Mic stream: 16 kHz native (no resample)&#xa;PCM16 mono → session.send_realtime_input" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#4285f4;fontSize=11" parent="gemini" vertex="1">
+                    <mxGeometry x="15" y="110" width="400" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="gm3" value="Event loop: audio deltas + tool calls&#xa;google_search grounding replaces OpenAI web_search" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#4285f4;fontSize=11" parent="gemini" vertex="1">
+                    <mxGeometry x="15" y="170" width="400" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="tools" value="Shared Tool Registry&#xa;(TOOL_HANDLERS in realtime.py)&#xa;&#xa;play_emotion · play_dance&#xa;set_volume · mute · unmute&#xa;who_called_me · set_timer&#xa;web_search (OpenAI only)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=12" parent="1" vertex="1">
+                    <mxGeometry x="830" y="540" width="240" height="170" as="geometry"/>
+                </mxCell>
+                <mxCell id="audio" value="Audio Output Path&#xa;Resample 24 kHz → SDK output rate · apply_output_volume()&#xa;reachy_mini.media.push_audio_sample() → Speaker" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;fontStyle=1" parent="1" vertex="1">
+                    <mxGeometry x="280" y="1080" width="540" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="flush" value="After turn returns:&#xa;Feed 25 silence frames (2 s) to flush openWakeWord feature buffer&#xa;Drain ~0.3 s of mic queue · Resume wake-word loop" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;dashed=1" parent="1" vertex="1">
+                    <mxGeometry x="280" y="1210" width="540" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333" parent="1" source="mic" target="wakeloop" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e4" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#82b366;fontSize=12;fontStyle=1" parent="1" source="thresh" target="turn" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e4b" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#9673a6;dashed=1" parent="1" source="thresh" target="nod" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="140" y="415"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333" parent="1" source="turn" target="provider" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e6" value="openai (default)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#d79b00;fontSize=11;fontStyle=1" parent="1" source="provider" target="openai" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e7" value="gemini" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#4285f4;fontSize=11;fontStyle=1" parent="1" source="provider" target="gemini" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#b85450;dashed=1;startArrow=classic;startFill=1" parent="1" source="tools" target="turn" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333" parent="1" source="openai" target="audio" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333" parent="1" source="gemini" target="audio" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#666666;dashed=1" parent="1" source="audio" target="flush" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e12" value="back to wake-word loop" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#666666;dashed=1;fontSize=11;fontStyle=2" parent="1" source="flush" target="wakeloop" edge="1">
+                    <mxGeometry x="0.0471" y="60" relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1110" y="1250"/>
+                            <mxPoint x="1110" y="340"/>
+                        </Array>
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

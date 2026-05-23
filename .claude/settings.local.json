@@ -11,7 +11,9 @@
       "Bash(python -c \"import reachy_mini; print\\(reachy_mini.__file__\\)\")",
       "WebFetch(domain:ai.google.dev)",
       "WebFetch(domain:blog.laozhang.ai)",
-      "Bash(git log *)"
+      "Bash(git log *)",
+      "Bash(git -C c:/git/github/reachy-chat grep -n -i \"camera\\\\|get_frame\\\\|get_image\\\\|capture\\\\|cv2\\\\|VideoCapture\" -- '*.py')",
+      "Bash(/venvs/apps_venv/bin/python -c \"import reachy_mini; help\\(reachy_mini.ReachyMini.media\\)\")"
     ]
   }
 }
