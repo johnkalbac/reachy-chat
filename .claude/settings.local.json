@@ -25,7 +25,10 @@
       "Bash(git -C \"c:/git/github/reachy-chat\" mv reachy_chat/gemini.py reachy_chat/gemini_realtime.py)",
       "Bash(git -C \"c:/git/github/reachy-chat\" status --short)",
       "Bash(python -m py_compile reachy_chat/realtime.py reachy_chat/openai_realtime.py reachy_chat/gemini_realtime.py reachy_chat/main.py reachy_chat/timers.py reachy_chat/prefetch.py reachy_chat/config.py)",
-      "Bash(echo \"Exit: $?\")"
+      "Bash(echo \"Exit: $?\")",
+      "WebFetch(domain:www.nvidia.com)",
+      "WebFetch(domain:openclaw.ai)",
+      "WebFetch(domain:hermes-agent.nousresearch.com)"
     ]
   }
 }

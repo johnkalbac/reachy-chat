@@ -1,11 +1,12 @@
 # reachy-chat
 
 An AI-enabled chat assistant for the Reachy Mini Wireless. Wake on a
-keyword, then have a one-shot voice conversation with either OpenAI's
+keyword, then have a multi-turn conversation with either OpenAI's
 Realtime API or Google's Gemini Live API (selectable in
 [`config.toml`](config.toml)): the user's request streams up over
-WebSocket, the assistant's audio reply streams back to the speaker, and
-we return to wake-word listening.
+WebSocket, the assistant's audio reply streams back to the speaker. Once 
+the conversation is completed, the device returns to listening mode for 
+wake-word detection.
 
 The wake word right now is **"hey jarvis"**, not "Reachy". Reason:
 [openWakeWord](https://github.com/dscripka/openWakeWord) is fully
@@ -22,6 +23,7 @@ deferred to a follow-up.
 - [Wireless Development Workflow](https://huggingface.co/docs/reachy_mini/platforms/reachy_mini/development_workflow)
 - [openWakeWord](https://github.com/dscripka/openWakeWord)
 - [Examples (upstream)](https://github.com/pollen-robotics/reachy_mini/tree/main/examples)
+- [Reachy Mini Skins](https://huggingface.co/spaces/pollen-robotics/reachy-mini-skins)
 
 ## Architecture
 

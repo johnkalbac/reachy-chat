@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>reachy-chat — AI Show & Tell</title>
+  <style>
+    :root {
+      --bg: #f3f4f6;
+      --panel: #ffffff;
+      --text: #1f2937;
+      --muted: #4b5563;
+      --accent: #4f46e5;
+      --accent-soft: #eef2ff;
+      --sidebar: #1f2937;
+      --sidebar-text: #e5e7eb;
+      --sidebar-muted: #9ca3af;
+      --border: #e5e7eb;
+      --code-bg: #f3f4f6;
+      --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+      --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.12);
+      --radius: 12px;
+      --sidebar-w: 260px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      line-height: 1.6;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.9em;
+      background: var(--code-bg);
+      padding: 0.1em 0.4em;
+      border-radius: 4px;
+      color: #111827;
+    }
+
+    /* --- Sidebar --- */
+    aside.sidebar {
+      position: fixed;
+      top: 0; left: 0; bottom: 0;
+      width: var(--sidebar-w);
+      background: var(--sidebar);
+      color: var(--sidebar-text);
+      padding: 2rem 1.5rem;
+      overflow-y: auto;
+    }
+    .sidebar h2 {
+      font-size: 1.1rem;
+      margin: 0 0 0.25rem;
+      color: #ffffff;
+    }
+    .sidebar .sub {
+      font-size: 0.85rem;
+      color: var(--sidebar-muted);
+      margin: 0 0 2rem;
+    }
+    .sidebar nav ol {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      counter-reset: section;
+    }
+    .sidebar nav li {
+      counter-increment: section;
+      margin: 0.15rem 0;
+    }
+    .sidebar nav a {
+      display: block;
+      padding: 0.5rem 0.75rem;
+      color: var(--sidebar-text);
+      border-radius: 6px;
+      font-size: 0.93rem;
+      transition: background 0.15s, color 0.15s;
+    }
+    .sidebar nav a::before {
+      content: counter(section) ".";
+      color: var(--sidebar-muted);
+      margin-right: 0.6rem;
+      font-variant-numeric: tabular-nums;
+    }
+    .sidebar nav a:hover {
+      background: rgba(255, 255, 255, 0.05);
+      text-decoration: none;
+      color: #ffffff;
+    }
+    .sidebar nav a.active {
+      background: var(--accent);
+      color: #ffffff;
+    }
+    .sidebar nav a.active::before { color: #c7d2fe; }
+
+    .sidebar .meta {
+      margin-top: 2rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      font-size: 0.82rem;
+      color: var(--sidebar-muted);
+    }
+    .sidebar .meta a { color: var(--sidebar-text); }
+
+    /* --- Main content --- */
+    main {
+      margin-left: var(--sidebar-w);
+      padding: 0;
+    }
+
+    section {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 4rem 2.5rem;
+      scroll-margin-top: 1rem;
+    }
+    section + section {
+      border-top: 1px solid var(--border);
+    }
+
+    h1 { font-size: 2.6rem; margin: 0 0 0.5rem; line-height: 1.15; }
+    h2 {
+      font-size: 1.9rem;
+      margin: 0 0 1.25rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 2px solid var(--accent-soft);
+      color: var(--text);
+    }
+    h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; color: var(--text); }
+    p  { margin: 0 0 1rem; }
+    p.tagline { color: var(--muted); font-size: 1.2rem; margin-top: 0; }
+    p.eyebrow {
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 0.78rem;
+      color: var(--accent);
+      font-weight: 600;
+      margin: 0 0 0.5rem;
+    }
+
+    ul { padding-left: 1.25rem; }
+    ul li { margin: 0.35rem 0; }
+    ul li strong { color: var(--text); }
+
+    figure {
+      margin: 1.5rem 0 2rem;
+    }
+    figure img {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-lg);
+      background: #ffffff;
+    }
+    figure.bordered img {
+      border: 1px solid var(--border);
+    }
+    figcaption {
+      margin-top: 0.6rem;
+      font-size: 0.88rem;
+      color: var(--muted);
+      text-align: center;
+      font-style: italic;
+    }
+
+    /* Side-by-side screenshot grid for the SDK section */
+    .screens {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1.5rem;
+      margin: 1.5rem 0 2rem;
+    }
+    .screens figure { margin: 0; }
+
+    .pill {
+      display: inline-block;
+      background: var(--accent-soft);
+      color: var(--accent);
+      padding: 0.15rem 0.65rem;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      margin-right: 0.4rem;
+    }
+
+    .callout {
+      background: var(--accent-soft);
+      border-left: 4px solid var(--accent);
+      padding: 1rem 1.25rem;
+      border-radius: 0 var(--radius) var(--radius) 0;
+      margin: 1.5rem 0;
+    }
+    .callout strong { color: var(--accent); }
+
+    /* Demo prompts list */
+    .prompts {
+      list-style: none;
+      padding: 0;
+      margin: 1rem 0 1.5rem;
+    }
+    .prompts li {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0.85rem 1.1rem;
+      margin: 0.6rem 0;
+      box-shadow: var(--shadow);
+      display: flex;
+      align-items: baseline;
+      gap: 0.85rem;
+      flex-wrap: wrap;
+    }
+    .prompts .say {
+      font-weight: 600;
+      color: var(--text);
+    }
+    .prompts .arrow { color: var(--muted); }
+    .prompts .tool {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.88em;
+      background: var(--code-bg);
+      padding: 0.1em 0.5em;
+      border-radius: 4px;
+      color: #111827;
+    }
+
+    /* Tool registry table */
+    table.tools {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0 2rem;
+      background: var(--panel);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      font-size: 0.92rem;
+    }
+    table.tools th, table.tools td {
+      text-align: left;
+      padding: 0.65rem 0.9rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    table.tools th {
+      background: var(--code-bg);
+      font-weight: 600;
+      font-size: 0.85rem;
+      letter-spacing: 0.02em;
+    }
+    table.tools tr:last-child td { border-bottom: none; }
+    table.tools td:first-child { white-space: nowrap; }
+
+    /* Resource link grid */
+    .links {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+    .links a.card {
+      display: block;
+      padding: 1.1rem 1.25rem;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      box-shadow: var(--shadow);
+      transition: transform 0.12s, box-shadow 0.12s, border-color 0.12s;
+    }
+    .links a.card:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-lg);
+      border-color: var(--accent);
+      text-decoration: none;
+    }
+    .links a.card .name {
+      display: block;
+      font-weight: 600;
+      color: var(--accent);
+      margin-bottom: 0.2rem;
+    }
+    .links a.card .desc {
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+
+    /* Skins iframe */
+    .iframe-wrap {
+      position: relative;
+      width: 100%;
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow-lg);
+      border: 1px solid var(--border);
+      background: #ffffff;
+    }
+    .iframe-wrap iframe {
+      display: block;
+      width: 100%;
+      height: 640px;
+      border: 0;
+    }
+
+    /* "Back to top" floating link */
+    a.to-top {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      background: var(--accent);
+      color: #ffffff;
+      padding: 0.55rem 0.95rem;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      box-shadow: var(--shadow-lg);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+      z-index: 100;
+    }
+    a.to-top.visible { opacity: 1; pointer-events: auto; }
+    a.to-top:hover { text-decoration: none; background: #4338ca; }
+
+    /* Cover slide gets a little extra love */
+    section.cover {
+      padding-top: 6rem;
+      padding-bottom: 6rem;
+    }
+    section.cover .meta-line {
+      margin-top: 2rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+    section.cover .meta-line span + span::before {
+      content: " · ";
+      margin: 0 0.3rem;
+      color: #d1d5db;
+    }
+
+    /* --- Mobile / narrow --- */
+    @media (max-width: 860px) {
+      aside.sidebar {
+        position: static;
+        width: 100%;
+        height: auto;
+        padding: 1.25rem 1.5rem;
+      }
+      .sidebar nav ol {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.25rem;
+      }
+      .sidebar nav li { margin: 0; }
+      .sidebar nav a {
+        padding: 0.35rem 0.6rem;
+        font-size: 0.85rem;
+      }
+      .sidebar .meta { display: none; }
+      main { margin-left: 0; }
+      section { padding: 2.5rem 1.25rem; }
+      h1 { font-size: 2rem; }
+      h2 { font-size: 1.5rem; }
+      .iframe-wrap iframe { height: 480px; }
+    }
+  </style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <h2>reachy-chat</h2>
+  <p class="sub">AI Show &amp; Tell — ~20 min</p>
+  <nav>
+    <ol>
+      <li><a href="#cover">Cover</a></li>
+      <li><a href="#demo">Live Demo</a></li>
+      <li><a href="#robot">The Robot</a></li>
+      <li><a href="#sdk">SDK &amp; Control Panel</a></li>
+      <li><a href="#pipeline">Voice Pipeline</a></li>
+      <li><a href="#next">Next Steps</a></li>
+      <li><a href="#skins">Skins &amp; Shells</a></li>
+      <li><a href="#qa">Q&amp;A / Resources</a></li>
+    </ol>
+  </nav>
+  <div class="meta">
+    <p>John Kalbac · 2026</p>
+  </div>
+</aside>
+
+<main>
+
+  <!-- 1. Cover -->
+  <section id="cover" class="cover">
+    <p class="eyebrow">AI Show &amp; Tell</p>
+    <h1>reachy-chat</h1>
+    <p class="tagline">A wake-word voice assistant on a 7-DOF desktop robot.</p>
+    <p>
+      Say <em>"hey jarvis"</em>, have a multi-turn conversation, and let the
+      robot play emotions, dance, set timers, search the web, and turn its
+      head toward you — all through a realtime audio pipeline that streams
+      to either OpenAI or Gemini.
+    </p>
+    <p class="meta-line">
+      <span>John Kalbac</span>
+      <span>~20 minutes</span>
+      <span>Live demo + walkthrough</span>
+    </p>
+  </section>
+
+  <!-- 2. Live Demo -->
+  <section id="demo">
+    <p class="eyebrow">1 — Open with a demo</p>
+    <h2>Live Demo</h2>
+    <p>
+      The point of this app is that it's just there in the room with you.
+      Before any slides, let's wake it up and run through the things it can do.
+    </p>
+
+    <figure>
+      <img src="wake-up-its-demo-time.gif" alt="Reachy Mini waking up on the 'hey jarvis' wake word" />
+      <figcaption>Wake word → antenna wave → multi-turn conversation.</figcaption>
+    </figure>
+
+    <h3>Prompts to try on stage</h3>
+    <ul class="prompts">
+      <li>
+        <span class="say">"Hey Jarvis, what time is it?"</span>
+        <span class="arrow">→</span>
+        <span>plain conversational reply, no tools</span>
+      </li>
+      <li>
+        <span class="say">"Hey Jarvis, play a dance."</span>
+        <span class="arrow">→</span>
+        <span class="tool">play_dance</span>
+      </li>
+      <li>
+        <span class="say">"Hey Jarvis, you seem happy."</span>
+        <span class="arrow">→</span>
+        <span class="tool">play_emotion</span>
+      </li>
+      <li>
+        <span class="say">"Hey Jarvis, set a 30-second timer."</span>
+        <span class="arrow">→</span>
+        <span class="tool">set_timer</span>
+        <span>(chime + spoken announcement on fire)</span>
+      </li>
+      <li>
+        <span class="say">"Hey Jarvis, who am I?"</span>
+        <span class="arrow">→</span>
+        <span class="tool">who_called_me</span>
+        <span>(direction-of-arrival head turn)</span>
+      </li>
+      <li>
+        <span class="say">"Hey Jarvis, what's the weather in Boston?"</span>
+        <span class="arrow">→</span>
+        <span class="tool">web_search</span>
+        <span>/ Gemini grounding</span>
+      </li>
+    </ul>
+
+    <div class="callout">
+      <strong>What to watch for:</strong> the antennas. A fast waggle means
+      the model is speaking; a slow sway means it's listening for a
+      follow-up. After ~8 seconds of silence the session closes and the
+      robot goes back to listening for the wake word.
+    </div>
+  </section>
+
+  <!-- 3. The Robot -->
+  <section id="robot">
+    <p class="eyebrow">2 — The hardware</p>
+    <h2>Reachy Mini &amp; Pollen Robotics</h2>
+
+    <p>
+      <strong>Reachy Mini</strong> is a small (~28 cm tall) desktop robot
+      designed as a developer platform — open hardware, open software,
+      Python-first.
+    </p>
+
+    <h3>7 degrees of freedom</h3>
+    <ul>
+      <li><strong>Head:</strong> 6-DOF parallel mechanism — X / Y / Z translation plus pitch / yaw / roll rotation</li>
+      <li><strong>Body:</strong> 1-DOF yaw (the whole robot rotates on its base)</li>
+      <li><strong>Antennas:</strong> 2 independent servos, used here as ambient state cues (speaking / listening)</li>
+    </ul>
+
+    <h3>On-board</h3>
+    <ul>
+      <li>Raspberry Pi 5 + custom motor controller board (aarch64, Python 3.12)</li>
+      <li>Stereo microphone array (the source of the direction-of-arrival used by <code>who_called_me</code>)</li>
+      <li>Speaker, fisheye camera, Wi-Fi</li>
+      <li>3D-printed shell — swappable, see <a href="#skins">Skins &amp; Shells</a></li>
+    </ul>
+
+    <h3>Pollen Robotics</h3>
+    <p>
+      French open-source robotics company — the original Reachy (full-size,
+      humanoid bimanual) and now Reachy Mini.
+      <strong>Acquired by Hugging Face in 2025</strong>, which is the
+      interesting hook for this audience: the robotics SDK now lives next
+      to the rest of the HF ecosystem, datasets (emotion / dance libraries)
+      are on the Hub, and the community gallery uses Spaces.
+    </p>
+  </section>
+
+  <!-- 4. SDK & Control Panel -->
+  <section id="sdk">
+    <p class="eyebrow">3 — How apps actually run on it</p>
+    <h2>Reachy SDK &amp; Control Panel</h2>
+
+    <p>
+      The robot ships with a desktop control app and an on-device daemon
+      (<code>reachy-mini-daemon</code>, systemd). The daemon discovers
+      installed apps via a Python entry point, launches one at a time, and
+      hands it a connected <code>ReachyMini</code> instance plus a
+      <code>stop_event</code>. <code>reachy-chat</code> is one of those apps.
+    </p>
+
+    <h3>1. Connect</h3>
+    <figure class="bordered">
+      <img src="reachy-mini-control/control-home.png" alt="Reachy Mini Control connection screen with Reachy Lite, Reachy WiFi, and Simulation options" />
+      <figcaption>USB-tethered, Wi-Fi, or simulation — the same SDK on the other side.</figcaption>
+    </figure>
+    <p>
+      The desktop app discovers the robot on the LAN and connects over the
+      network. Same code talks to a real robot, a Reachy Lite, or a
+      simulator — useful for iterating on motion or prompts without the
+      hardware nearby.
+    </p>
+
+    <h3>2. Main view — live state and installed apps</h3>
+    <figure class="bordered">
+      <img src="reachy-mini-control/control-apps.png" alt="Reachy Mini Control main view: 3D model, webcam, audio levels, log stream, and a list of installed applications" />
+      <figcaption>Live 3D pose + webcam, audio levels, log stream, and the installed-apps panel.</figcaption>
+    </figure>
+    <p>
+      Notice <strong><code>reachy-chat</code></strong> in the apps list on
+      the right — that's the same app we just demoed. It's discovered via
+      a one-line entry in <code>pyproject.toml</code>:
+    </p>
+    <p>
+      <code>[project.entry-points."reachy_mini_apps"]</code><br />
+      <code>reachy-chat = "reachy_chat.main:ReachyChat"</code>
+    </p>
+    <p>
+      The contract: implement a <code>ReachyMiniApp</code> subclass with a
+      <code>run(reachy_mini, stop_event)</code> method, install the
+      package, and it shows up. Only one app runs at a time; the daemon
+      sends <code>SIGINT</code> to stop the current one before starting
+      another.
+    </p>
+
+    <h3>3. Manual controller — 7 DOF, exposed</h3>
+    <figure class="bordered">
+      <img src="reachy-mini-control/control-manual-movement.png" alt="Reachy Mini Control manual movement view with sliders for antennas, head X/Y/Z, pitch/yaw/roll, and body yaw" />
+      <figcaption>Every joint as a slider — useful for debugging motion clips and antenna cues.</figcaption>
+    </figure>
+    <p>
+      All 7 joints exposed as sliders. The same targets the SDK writes to
+      from code — both the antenna wave (during speaking / listening) and
+      the recorded emotion / dance clips drive these axes.
+    </p>
+
+    <div class="callout">
+      <strong>Why we have a <code>motion_lock</code>:</strong> the antenna
+      wave wants to write a new target every few milliseconds, but a dance
+      clip holds the joints for a few seconds. Without a shared lock they
+      fight and the antennas judder. The lock is a single
+      <code>threading.Lock()</code> shared between the wave loop and the
+      recorded-move player.
+    </div>
+
+  </section>
+
+  <!-- 5. Voice Pipeline -->
+  <section id="pipeline">
+    <p class="eyebrow">4 — How the conversation works</p>
+    <h2>Voice Pipeline</h2>
+
+    <figure>
+      <img src="voice-pipeline.png" alt="Voice pipeline diagram: microphone -> wake-word loop -> realtime turn dispatched to OpenAI or Gemini -> audio output" />
+      <figcaption>Mic → wake-word loop → realtime turn (OpenAI or Gemini) → speaker.</figcaption>
+    </figure>
+
+    <h3>The hot path</h3>
+    <ul>
+      <li><strong>Mic:</strong> SDK delivers 16 kHz stereo float32 → we convert to int16 mono, accumulate into 80 ms / 1280-sample frames</li>
+      <li><strong>Wake word:</strong> each frame goes into openWakeWord (ONNX); local, no cloud round-trip until the wake word actually fires</li>
+      <li><strong>Realtime turn:</strong> on hit, dispatch to <code>run_openai_turn</code> or <code>run_gemini_turn</code> based on <code>provider.name</code> in <code>config.toml</code></li>
+      <li><strong>Resample:</strong> 16 kHz → 24 kHz upstream (OpenAI Realtime wants 24 kHz PCM16); 24 kHz → SDK output rate downstream</li>
+      <li><strong>Turn detection:</strong> server-side VAD — we don't have to decide when the user is done talking, the provider does</li>
+      <li><strong>Multi-turn:</strong> after each reply, mic stays open for an 8 s follow-up window (slow antenna sway). Silence past that closes the session; max 3 min total.</li>
+    </ul>
+
+    <h3>Tool registry</h3>
+    <p>
+      The realtime model has a fixed set of function tools. Each one is a
+      <code>_&lt;name&gt;_schema()</code> builder + a
+      <code>_tool_&lt;name&gt;(reachy_mini, args, ctx)</code> handler in
+      <code>realtime.py</code> — adding a tool is one place.
+    </p>
+
+    <table class="tools">
+      <thead>
+        <tr><th>Tool</th><th>What it does</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>play_emotion</code></td><td>Plays one short emotion clip from the HF emotions library. Async — model keeps talking.</td></tr>
+        <tr><td><code>play_dance</code></td><td>Plays one longer dance clip. Async.</td></tr>
+        <tr><td><code>set_volume</code></td><td>Sets output volume 0–100; applies to voice, chime, and timer announcements.</td></tr>
+        <tr><td><code>mute</code> / <code>unmute</code></td><td>Silence without losing the volume level.</td></tr>
+        <tr><td><code>who_called_me</code></td><td>Reads direction-of-arrival from the mic array, turns the head toward the speaker.</td></tr>
+        <tr><td><code>web_search</code></td><td>OpenAI: bridges to the Responses-API <code>web_search</code> tool (synchronous, blocks the loop briefly). Gemini: replaced by built-in <code>google_search</code> grounding.</td></tr>
+        <tr><td><code>set_timer</code></td><td>Registers a countdown. On fire: plays the chime, opens a brief realtime session to announce the label.</td></tr>
+      </tbody>
+    </table>
+
+  </section>
+
+  <!-- 6. Next Steps -->
+  <section id="next">
+    <p class="eyebrow">5 — Where this goes next</p>
+    <h2>Next Steps &amp; Integrations</h2>
+
+    <p>
+      The current app is a complete loop, but the architecture leaves
+      room to bolt on more. A few directions:
+    </p>
+
+    <p>
+      The richest direction is using Reachy as a <strong>voice front-end
+      for an autonomous agent that already knows you</strong> — instead
+      of a fresh realtime session per wake word, the conversation routes
+      to a long-running agent with memory, skills, and access to your
+      tools. Three projects make this concrete:
+    </p>
+
+    <ul>
+      <li>
+        <strong><a href="https://openclaw.ai/" target="_blank" rel="noopener">OpenClaw</a></strong>
+        — open-source local-first AI assistant that runs on your machine and
+        can be reached via WhatsApp, Telegram, Discord, Slack, and other
+        chat apps; controls browsers, files, and shell, with persistent
+        memory and a community plugin ecosystem.
+        <em>Integration:</em> wire Reachy in as another channel — wake on
+        "hey jarvis", route to a local OpenClaw instance, and your house
+        gets a voice surface on an agent that already sees your files and
+        calendar.
+      </li>
+      <li>
+        <strong><a href="https://www.nvidia.com/en-us/ai/nemoclaw/" target="_blank" rel="noopener">NemoClaw</a></strong>
+        — NVIDIA's open-source security layer on top of OpenClaw: adds
+        policy-based privacy and security guardrails (via NVIDIA OpenShell)
+        and is tuned for local execution on RTX PCs and DGX systems.
+        <em>Integration:</em> same voice-on-an-agent story, but with
+        enterprise-grade guardrails around what the agent is allowed to
+        touch — useful for deploying Reachy somewhere that actually cares.
+      </li>
+      <li>
+        <strong><a href="https://hermes-agent.nousresearch.com/" target="_blank" rel="noopener">Hermes (Nous Research)</a></strong>
+        — autonomous server-based agent with persistent memory, skill
+        generation that improves over time, scheduled automation, and
+        sandboxed execution across local / Docker / SSH / Modal backends.
+        Already speaks Telegram, Discord, Slack, Signal, Email, CLI.
+        <em>Integration:</em> add a voice channel — the
+        <code>set_timer</code> tool becomes "schedule a nightly summary"
+        and the agent's learned skills are reachable from across the room.
+      </li>
+      <li>
+        <strong>Vision detection</strong> — the Reachy Mini has a fisheye
+        camera that's currently unused by this app. A small on-device VLM
+        (or a remote one called from a new tool) would unlock "look at
+        what I'm pointing at" interactions: <code>describe_scene()</code>,
+        <code>find_object(name)</code>, <code>track_face()</code>.
+      </li>
+      <li>
+        <strong>Running fully locally</strong> — swap the realtime
+        backends for a local stack: <code>whisper.cpp</code> for STT, a
+        small local LLM, and Piper or Kokoro for TTS. Loses some latency
+        and reasoning quality, gains zero cloud dependency. Could ship as
+        a third provider in <code>config.toml</code> alongside
+        <code>openai</code> and <code>gemini</code>.
+      </li>
+    </ul>
+
+    <div class="callout">
+      The common thread: the realtime API is the easy part. The
+      provider abstraction in <code>realtime.py</code> means swapping in
+      a text agent (OpenClaw / NemoClaw / Hermes) behind an STT → agent
+      → TTS shim is mostly a new <code>run_&lt;agent&gt;_turn</code>
+      function and a config switch.
+    </div>
+  </section>
+
+  <!-- 7. Skins & Shells -->
+  <section id="skins">
+    <p class="eyebrow">6 — The body is forkable too</p>
+    <h2>Skins &amp; 3D-Printed Shells</h2>
+
+    <p>
+      The Reachy Mini's outer shell is a 3D print. Pollen Robotics hosts
+      a community gallery on Hugging Face Spaces where designers share
+      alternate shells — different colors, themes, character mods, the
+      whole open-hardware ethos.
+    </p>
+
+    <figure class="bordered">
+      <a href="https://huggingface.co/spaces/pollen-robotics/reachy-mini-skins" target="_blank" rel="noopener">
+        <img src="skins.png" alt="Gallery of community-designed Reachy Mini skins: Halloween Pumpkin, Mini Arcade, Christmas Tree, Hugging Face, Zebra" />
+      </a>
+      <figcaption>
+        Community skins gallery —
+        <a href="https://huggingface.co/spaces/pollen-robotics/reachy-mini-skins" target="_blank" rel="noopener">huggingface.co/spaces/pollen-robotics/reachy-mini-skins ↗</a>
+      </figcaption>
+    </figure>
+
+    <div class="callout">
+      This is what a developer-friendly hardware platform looks like:
+      <strong>the body itself is forkable.</strong> The software entry
+      points let you ship a new app; the shell library lets you ship a
+      new look. Both are one PR away.
+    </div>
+  </section>
+
+  <!-- 8. Q&A -->
+  <section id="qa">
+    <p class="eyebrow">7 — Wrap-up</p>
+    <h2>Q&amp;A &amp; Resources</h2>
+
+    <p>Happy to dig into any of it — code, hardware, the realtime APIs, deployment, motion control.</p>
+
+    <div class="links">
+      <a class="card" href="https://github.com/jkalbac/reachy-chat" target="_blank" rel="noopener">
+        <span class="name">reachy-chat on GitHub ↗</span>
+        <span class="desc">This app — source, config, README.</span>
+      </a>
+      <a class="card" href="https://huggingface.co/docs/reachy_mini" target="_blank" rel="noopener">
+        <span class="name">Reachy Mini SDK docs ↗</span>
+        <span class="desc">Official SDK reference, app-building guide, dev workflow.</span>
+      </a>
+      <a class="card" href="https://github.com/pollen-robotics/reachy_mini" target="_blank" rel="noopener">
+        <span class="name">Pollen Robotics — reachy_mini ↗</span>
+        <span class="desc">Upstream SDK repo + example apps.</span>
+      </a>
+      <a class="card" href="https://github.com/dscripka/openWakeWord" target="_blank" rel="noopener">
+        <span class="name">openWakeWord ↗</span>
+        <span class="desc">License-free local wake-word detection.</span>
+      </a>
+      <a class="card" href="https://platform.openai.com/docs/guides/realtime" target="_blank" rel="noopener">
+        <span class="name">OpenAI Realtime API ↗</span>
+        <span class="desc">WebSocket-based speech-to-speech.</span>
+      </a>
+      <a class="card" href="https://ai.google.dev/gemini-api/docs/live" target="_blank" rel="noopener">
+        <span class="name">Gemini Live API ↗</span>
+        <span class="desc">Google's realtime multimodal API.</span>
+      </a>
+      <a class="card" href="https://huggingface.co/spaces/pollen-robotics/reachy-mini-skins" target="_blank" rel="noopener">
+        <span class="name">Reachy Mini Skins gallery ↗</span>
+        <span class="desc">Community 3D-printed shells.</span>
+      </a>
+    </div>
+  </section>
+
+</main>
+
+<a href="#cover" class="to-top" id="toTop">▲ Top</a>
+
+<script>
+  // Highlight sidebar entry for the section currently in view.
+  const links = document.querySelectorAll('.sidebar nav a');
+  const sections = Array.from(document.querySelectorAll('main section'));
+  const byId = new Map(Array.from(links).map(a => [a.getAttribute('href').slice(1), a]));
+
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const a = byId.get(e.target.id);
+        if (a) a.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-40% 0px -55% 0px', threshold: 0 });
+  sections.forEach(s => io.observe(s));
+
+  // Show "back to top" once the user has scrolled a bit.
+  const toTop = document.getElementById('toTop');
+  window.addEventListener('scroll', () => {
+    if (window.scrollY > 600) toTop.classList.add('visible');
+    else toTop.classList.remove('visible');
+  });
+</script>
+
+</body>
+</html>
