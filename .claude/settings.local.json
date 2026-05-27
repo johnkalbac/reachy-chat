@@ -28,7 +28,11 @@
       "Bash(echo \"Exit: $?\")",
       "WebFetch(domain:www.nvidia.com)",
       "WebFetch(domain:openclaw.ai)",
-      "WebFetch(domain:hermes-agent.nousresearch.com)"
+      "WebFetch(domain:hermes-agent.nousresearch.com)",
+      "Bash(pip show *)",
+      "Bash(ls ~/.cache/huggingface/hub/ 2>nul | grep -i emotion)",
+      "Read(//c/Users/John/.cache/huggingface/hub/**)",
+      "Bash(xargs -n1 basename)"
     ]
   }
 }
